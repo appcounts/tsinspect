@@ -1,0 +1,19 @@
+{
+  "name": "@tsinspect/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "tsinspect": "./dist/index.js"
+  },
+  "dependencies": {
+    "@tsinspect/core": "workspace:*",
+    "@tsinspect/server": "workspace:*",
+    "commander": "^15.0.0"
+  },
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "node ../../tools/build-cli.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

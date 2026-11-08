@@ -1,0 +1,40 @@
+{
+  "name": "tsinspect",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "dev": "tsx apps/cli/src/index.ts",
+    "serve": "tsx apps/server/src/index.ts",
+    "dev:server": "tsx apps/server/src/index.ts",
+    "dev:web": "corepack pnpm --filter @tsinspect/web dev",
+    "build:web": "corepack pnpm --filter @tsinspect/web build",
+    "test:e2e": "playwright test",
+    "build": "corepack pnpm -r build",
+    "build:exe": "node tools/build-exe.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "probe:atsc": "tsx apps/cli/src/index.ts probe .cache/streams/atsc-473.head.ts",
+    "probe:isdb": "tsx apps/cli/src/index.ts probe .cache/streams/isdb-nhk.head.ts",
+    "probe:dvb": "tsx apps/cli/src/index.ts probe .cache/streams/dvb-france-uhf33.head.ts",
+    "probe:brazil": "tsx apps/cli/src/index.ts probe .cache/streams/isdb-tb-204.head.ts",
+    "compare:tsduck": "node tools/compare-tsduck.mjs atsc-473 isdb-nhk dvb-france-uhf33 isdb-tb-204",
+    "bench": "tsx tools/benchmark.ts",
+    "fixtures": "node tools/fetch-streams/fetch.mjs --head 16 atsc-473 isdb-nhk dvb-france-uhf33",
+    "fixtures:204": "node tools/fetch-streams/fetch.mjs --head 8 isdb-tb-204"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "@types/node": "^24.13.6",
+    "esbuild": "^0.28.2",
+    "postject": "1.0.0-alpha.6",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$comment": "Test streams from the public TSDuck streams repository. Files are downloaded into .cache/streams/ and never committed. TSDuck: https://tsduck.io/streams/",
+  "streams": {
+    "atsc-473": {
+      "url": "https://tsduck.io/streams/usa-atsc/473.ts",
+      "standard": "ATSC 1.0",
+      "description": "ATSC 1.0 terrestrial capture (USA), PSIP tables and AC-3 audio"
+    },
+    "isdb-nhk": {
+      "url": "https://tsduck.io/streams/japan-dttv/NHK.ts",
+      "standard": "ISDB-T",
+      "description": "ISDB-T terrestrial capture (Japan), BIT and clear ARIB captions on main-service PID 0x0130 (A profile) and 1-seg PID 0x0587 (C profile)"
+    },
+    "isdb-aab": {
+      "url": "https://tsduck.io/streams/japan-dttv/AAB.ts",
+      "standard": "ISDB-T",
+      "description": "ISDB-T Akita capture (Japan), clear ARIB captions in the 1-seg data service (PID 0x0314) and CA-scrambled main-service captions"
+    },
+    "isdb-abs": {
+      "url": "https://tsduck.io/streams/japan-dttv/ABS.ts",
+      "standard": "ISDB-T",
+      "description": "ISDB-T Akita Broadcasting capture (Japan), 21 clear C-profile ARIB captions on the 1-seg data service"
+    },
+    "dvb-france-uhf33": {
+      "url": "https://tsduck.io/streams/france-dttv/tnt-uhf33-570MHz-2019-01-22.ts",
+      "standard": "DVB-T",
+      "description": "French DVB-T multiplex (UHF 33), EIT, SDT, Teletext and subtitles"
+    },
+    "france-uhf30": {
+      "url": "https://tsduck.io/streams/france-dttv/tnt-uhf30-546MHz-2019-01-22.ts",
+      "standard": "DVB-T",
+      "description": "French DVB-T multiplex (UHF 30) with 11 DVB bitmap subtitle streams (M6, W9, Arte, France 5, 6ter)"
+    },
+    "isdb-tb-204": {
+      "url": "https://tsduck.io/streams/brazil-bts204/BTS204.ts",
+      "standard": "ISDB-Tb",
+      "description": "Brazilian ISDB-Tb with 204-byte packet trailers and an IIP PID"
+    },
+    "uk-freeview-482": {
+      "url": "https://tsduck.io/streams/uk-freeview/482000000.ts",
+      "standard": "DVB-T",
+      "description": "UK Freeview multiplex with Teletext and DVB subtitles"
+    },
+    "italy-mux1rai": {
+      "url": "https://tsduck.io/streams/italy-sardinia-dttv/mux1rai.ts",
+      "standard": "DVB-T",
+      "description": "Italian Rai mux (Sardinia), Teletext subtitle pages 777/778 on Rai 1/2/3/News 24; no DVB bitmap subtitles (0x59) signalled"
+    },
+    "france-dvbt2-uhd": {
+      "url": "https://tsduck.io/streams/france-dvbt2-uhd/tnt-paris-uhf-24.ts",
+      "standard": "DVB-T2",
+      "description": "French DVB-T2 multiplex with two UHD HEVC services"
+    }
+  }
+}

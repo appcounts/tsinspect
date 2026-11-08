@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# test / coverage
+coverage/
+test-results/
+playwright-report/
+
+# downloaded test streams (large, never commit)
+.cache/
+*.m2ts
+*.trp
+# NOTE: *.ts is intentionally not ignored because TypeScript sources use the same suffix.
+
+# local reports
+reports/
+*.local.json
+.openchamber/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# logs
+*.log
