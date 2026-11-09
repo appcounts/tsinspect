@@ -76,7 +76,10 @@ export function formatProbeHtml(result: ProbeResult, options: HtmlFormatOptions 
         .join('/')}`,
     );
   }
-  summaryRows.push(['Capabilities', escapeHtml(caps.length > 0 ? caps.join(', ') : 'none detected')]);
+  summaryRows.push([
+    'Capabilities',
+    escapeHtml(caps.length > 0 ? caps.join(', ') : 'none detected'),
+  ]);
 
   if (result.isdb) {
     const layers = result.isdb.layers
@@ -108,6 +111,32 @@ export function formatProbeHtml(result: ProbeResult, options: HtmlFormatOptions 
       parts.push(
         `EWBS ${result.emergency.ewbs.activated ? 'active' : 'inactive'}, ${result.emergency.ewbs.services.length} service(s), ${started} started`,
       );
+    }
+    if (result.emergency.ews) {
+      const ews = result.emergency.ews;
+      const names = [
+        ...new Set(
+          ews.regions.map((region) => {
+            const disaster = ews.disasters.find(
+              (entry) => entry.disasterCode === region.disasterCode,
+            );
+            return disaster?.name || `0x${region.disasterCode.toString(16)}`;
+          }),
+        ),
+      ];
+      parts.push(
+        `EWS PID ${hex16(ews.pid)} ${names.join('/') || '-'}: ${ews.regions.length} region(s), ${ews.disasters.length} disaster(s), ${ews.messages.length} message(s)`,
+      );
+    }
+    if (result.emergency.timeline && result.emergency.timeline.length > 0) {
+      for (const segment of result.emergency.timeline) {
+        const range = `${formatDuration(segment.startSec)}-${
+          segment.endSec === undefined ? 'ongoing' : formatDuration(segment.endSec)
+        }`;
+        const level = segment.level !== undefined ? ` L${segment.level}` : '';
+        const info = [segment.title, segment.areas].filter(Boolean).join(' · ');
+        parts.push(`${range} ${segment.kind}${level}${info ? ` ${info}` : ''}`);
+      }
     }
     if (parts.length > 0) {
       summaryRows.push(['Emergency', escapeHtml(parts.join('; '))]);
@@ -141,16 +170,11 @@ export function formatProbeHtml(result: ProbeResult, options: HtmlFormatOptions 
     } else if (service.serviceTypeName) {
       meta.push(`Type ${escapeHtml(service.serviceTypeName)}`);
     }
-    if (
-      service.sourceId !== undefined &&
-      service.sourceId !== service.serviceId
-    ) {
+    if (service.sourceId !== undefined && service.sourceId !== service.serviceId) {
       meta.push(`Source ID ${hex16(service.sourceId)}`);
     }
     if (service.majorChannelNumber !== undefined) {
-      meta.push(
-        `Channel ${service.majorChannelNumber}.${service.minorChannelNumber ?? 0}`,
-      );
+      meta.push(`Channel ${service.majorChannelNumber}.${service.minorChannelNumber ?? 0}`);
     }
     if (service.channelTsid !== undefined) meta.push(`Channel TSID ${hex16(service.channelTsid)}`);
     if (service.modulationMode !== undefined) {
@@ -193,9 +217,7 @@ export function formatProbeHtml(result: ProbeResult, options: HtmlFormatOptions 
     }
 
     return `<section class="service">
-      <h3>Program ${service.programNumber}${
-        service.name ? ` - ${escapeHtml(service.name)}` : ''
-      }${
+      <h3>Program ${service.programNumber}${service.name ? ` - ${escapeHtml(service.name)}` : ''}${
         service.majorChannelNumber !== undefined
           ? ` <span class="muted">(channel ${service.majorChannelNumber}.${service.minorChannelNumber ?? 0})</span>`
           : ''
@@ -217,21 +239,21 @@ export function formatProbeHtml(result: ProbeResult, options: HtmlFormatOptions 
           (dimension) => `<tr>
         <th>${escapeHtml(dimension.name || '(unnamed)')}</th>
         <td>${dimension.graduatedScale ? 'graduated' : 'litteral'}</td>
-        <td>${dimension.values
-          .map(
-            (value) =>
-              `${value.abbrev ? `<strong>${escapeHtml(value.abbrev)}</strong> ` : ''}${escapeHtml(value.text)}`,
-          )
-          .join('<br>') || '-'}</td>
+        <td>${
+          dimension.values
+            .map(
+              (value) =>
+                `${value.abbrev ? `<strong>${escapeHtml(value.abbrev)}</strong> ` : ''}${escapeHtml(value.text)}`,
+            )
+            .join('<br>') || '-'
+        }</td>
       </tr>`,
         )
         .join('');
       return `<section class="service">
       <h3>RRT${region.ratingRegion}${region.name ? ` - ${escapeHtml(region.name)}` : ''}</h3>
       <p class="muted">Protocol ${region.protocolVersion} &middot; ${region.dimensions.length} dimension(s)${
-        region.descriptors.length > 0
-          ? ` &middot; ${descriptorList(region.descriptors, all)}`
-          : ''
+        region.descriptors.length > 0 ? ` &middot; ${descriptorList(region.descriptors, all)}` : ''
       }</p>
       <table><thead><tr><th>Dimension</th><th>Scale</th><th>Rating values</th></tr></thead><tbody>${dimensionRows}</tbody></table>
     </section>`;
@@ -419,11 +441,7 @@ footer { margin-top: 3rem; color: var(--muted); font-size: 12px; }
   <h2>Services</h2>
   ${services.length > 0 ? services.join('') : '<p class="muted">No services found.</p>'}
 
-  ${
-    ratingRegionSections.length > 0
-      ? `<h2>ATSC rating regions</h2>${ratingRegionSections}`
-      : ''
-  }
+  ${ratingRegionSections.length > 0 ? `<h2>ATSC rating regions</h2>${ratingRegionSections}` : ''}
 
   <h2>EPG</h2>
   ${

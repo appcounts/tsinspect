@@ -2,7 +2,7 @@
 
 一款面向 **DVB（T/T2/S/S2/C）**、**ATSC 1.0** 和 **ISDB-T / ISDB-Tb** 的 MPEG-TS 传输流快速分析工具。
 
-`tsinspect` 可读取本地文件或 HTTP(S) 传输流，重组 PSI/SI section，并输出包布局、传输元数据、服务、基本流、PID、表、EPG 数据和诊断信息。同一套 TypeScript 核心同时驱动 CLI、本地 Web UI 和 Web Worker。
+`tsinspect` 可读取本地文件或 HTTP(S) 传输流，重组 PSI/SI section，并输出包布局、传输元数据、服务、基本流、PID、表、EPG 数据和诊断信息。同一套 TypeScript 核心驱动 CLI 与服务端分析流程，也可直接在 Node、浏览器或 Web Worker 中运行。
 
 > 状态：**本地可用**。CLI 可探测文件和静态 HTTP(S) 流，解析 PAT、PMT、SDT、NIT、BAT、EIT、RST、ST、SIT、TDT/TOT、AIT、ATSC PSIP（MGT/TVCT/STT/EIT/ETT/RRT）以及 ISDB BIT/LDT/SDTT/CDT；解码日文 ARIB 与巴西 SBTVD（ABNT NBR 15606-1）文本及 ARIB 追加符号；读取 ISDB-Tb 204 字节尾部和 IIP PID；建立 PES 流索引；提取 Teletext 页面、带样式/DRCS 图层的 ARIB 字幕文本、带独立样式图层的 ATSC CEA-608/708 字幕以及 DVB 字幕段；索引 VBI 单元、SCTE-35 splice 信息、SCTE-18 EAS 与 ISDB EWBS 应急信息，以及 MPE/MPE-FEC 数据报和 DSM-CC carousel；解析 MPEG-2/H.264/H.265 视频和 AAC/AC-3/E-AC-3 音频参数；推断载荷能力（Teletext、字幕、captions、VBI、SCTE-35、CA）；跟踪 PID、PCR/时序、连续计数器（含重复包）和 section CRC；并可导出文本、JSON、表索引、校验结果、SRT 或独立 HTML 报告。本地 Fastify 控制台以浏览器 UI 呈现同样数据。PAT/PMT/SDT/VCT 结构会在 CI 式检查中与 TSDuck 比对。
 

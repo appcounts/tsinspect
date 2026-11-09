@@ -1,6 +1,78 @@
 import type { ProbeResult, ProbeService } from '@tsinspect/core';
 import type { UiKey, Vars } from './i18n';
 
+/**
+ * Name a subtitle/caption PID from its PMT descriptors. Private-data streams
+ * otherwise only show the generic "PES private data" description.
+ */
+function subtitleStreamName(stream: ProbeService['streams'][number]): string | undefined {
+  const tags = new Set(stream.descriptors.map((descriptor) => descriptor.tag));
+  if (tags.has(0x59)) return 'DVB bitmap subtitles';
+  if (tags.has(0x56)) return 'DVB Teletext subtitles';
+  if (tags.has(0x46)) return 'VBI Teletext subtitles';
+  if (tags.has(0x45)) return 'VBI data';
+  if (tags.has(0x86)) return 'ATSC CEA-608/708 closed captions';
+  const arib = stream.descriptors.some((descriptor) => {
+    if (descriptor.tag !== 0xfd) return false;
+    const componentId = Number(descriptor.fields?.dataComponentId);
+    return componentId === 0x0008 || componentId === 0x0012;
+  });
+  if (arib) return 'ARIB captions';
+  return undefined;
+}
+
+/** DVB / ATSC audio descriptors that identify a private-data PID as audio. */
+const AUDIO_DESCRIPTORS = new Map<number, string>([
+  [0x6a, 'Dolby Digital (AC-3)'],
+  [0x7a, 'Dolby Digital Plus (E-AC-3)'],
+  [0x7b, 'DTS'],
+  [0x7c, 'AAC'],
+  [0x81, 'Dolby Digital (AC-3)'],
+]);
+
+function audioStreamName(stream: ProbeService['streams'][number]): string | undefined {
+  for (const descriptor of stream.descriptors) {
+    const named = AUDIO_DESCRIPTORS.get(descriptor.tag);
+    if (named) return named;
+  }
+  const registration = stream.descriptors.find((descriptor) => descriptor.tag === 0x05)?.fields
+    ?.formatIdentifier;
+  switch (registration) {
+    case 'DTSH':
+      return 'DTS:X';
+    case 'DTS1':
+      return 'DTS';
+    case 'AC-4':
+      return 'Dolby Atmos (AC-4)';
+    default:
+      break;
+  }
+  // DVB extension descriptor (0x7F) carries AC-4 / DTS / AAC as an extension
+  // name so the stream stays private-data typed but is still audio.
+  for (const descriptor of stream.descriptors) {
+    if (descriptor.tag !== 0x7f) continue;
+    const name = String(descriptor.fields?.extensionName ?? '');
+    switch (name.toUpperCase()) {
+      case 'AC-4':
+        return 'Dolby Atmos (AC-4)';
+      case 'DTS':
+      case 'DTSHD':
+      case 'DTS:X':
+        return name.includes(':X') ? 'DTS:X' : name.includes('HD') ? 'DTS-HD' : 'DTS';
+      case 'AAC':
+        return 'AAC';
+      case 'AC-3':
+        return 'Dolby Digital (AC-3)';
+      case 'E-AC-3':
+      case 'ENHANCED AC-3':
+        return 'Dolby Digital Plus (E-AC-3)';
+      default:
+        break;
+    }
+  }
+  return undefined;
+}
+
 const CAPABILITY_LABELS: Record<string, string> = {
   teletext: 'Teletext',
   dvbSubtitles: 'DVB subtitles',
@@ -114,7 +186,10 @@ export function readableLanguages(value: string): string {
 }
 
 export function hex16(value: number | undefined): string {
-  return `0x${Number(value ?? 0).toString(16).padStart(4, '0').toUpperCase()}`;
+  return `0x${Number(value ?? 0)
+    .toString(16)
+    .padStart(4, '0')
+    .toUpperCase()}`;
 }
 
 export function formatBytes(value: number | undefined): string {
@@ -143,9 +218,7 @@ export function formatCueTime(value: number): string {
   const h = Math.floor(value / 3600);
   const m = Math.floor((value % 3600) / 60);
   const s = value % 60;
-  return `${h > 0 ? `${h}:` : ''}${String(m).padStart(2, '0')}:${s
-    .toFixed(3)
-    .padStart(6, '0')}`;
+  return `${h > 0 ? `${h}:` : ''}${String(m).padStart(2, '0')}:${s.toFixed(3).padStart(6, '0')}`;
 }
 
 export function formatIsoMinute(value: string | undefined): string {
@@ -206,13 +279,45 @@ export function esText(
   return parts.join(' ');
 }
 
-export function streamTitle(
-  stream: ProbeService['streams'][number],
-): string {
-  if (/^(PES )?private data$/i.test(stream.description) && stream.es?.codec) {
-    const kind =
-      stream.es.kind === 'audio' ? 'audio' : stream.es.kind === 'video' ? 'video' : '';
-    return `${stream.es.codec}${kind ? ` ${kind}` : ''}`;
+export function streamKind(stream: ProbeService['streams'][number]): string {
+  if (stream.es?.kind) return stream.es.kind;
+  if (audioStreamName(stream)) return 'audio';
+  if (subtitleStreamName(stream)) return 'subtitle';
+  return 'unknown';
+}
+
+export function streamTitle(stream: ProbeService['streams'][number]): string {
+  if (/^(PES )?private data$/i.test(stream.description)) {
+    if (stream.es?.codec) {
+      const kind = stream.es.kind === 'audio' ? 'audio' : stream.es.kind === 'video' ? 'video' : '';
+      return `${stream.es.codec}${kind ? ` ${kind}` : ''}`;
+    }
+    const audio = audioStreamName(stream);
+    if (audio) return audio;
+    const subtitle = subtitleStreamName(stream);
+    if (subtitle) return subtitle;
+    const registration = stream.descriptors.find((descriptor) => descriptor.tag === 0x05)?.fields
+      ?.formatIdentifier;
+    if (registration === 'GA94') return 'ATSC CEA-608/708 closed captions';
   }
   return stream.description;
+}
+
+/**
+ * Human-readable country name for an ISO 3166-1 alpha-2 or alpha-3 code
+ * (for example "FRA" → "France", "GB" → "United Kingdom"). Falls back to
+ * the raw code when the runtime cannot resolve a localized name.
+ */
+export function countryLabel(code: string | undefined): string | undefined {
+  if (!code) return undefined;
+  const upper = code.trim().toUpperCase();
+  if (upper.length !== 2 && upper.length !== 3) return undefined;
+  try {
+    const names = new Intl.DisplayNames([], { type: 'region' });
+    const resolved = names.of(upper);
+    if (resolved && resolved !== upper) return `${resolved} (${upper})`;
+    return upper;
+  } catch {
+    return upper;
+  }
 }

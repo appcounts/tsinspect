@@ -622,8 +622,9 @@ export class Atsc708Decoder {
     return 5;
   }
 
-  snapshot(): Atsc708Snapshot | undefined {
-    let best: { service: number; windows: Atsc708WindowSnapshot[]; text: string } | undefined;
+  /** One snapshot per service that currently shows text. */
+  snapshots(): Atsc708Snapshot[] {
+    const list: Atsc708Snapshot[] = [];
     for (let index = 0; index < this.services.length; index += 1) {
       const service = this.services[index] as ServiceState;
       const windows: Atsc708WindowSnapshot[] = [];
@@ -640,11 +641,16 @@ export class Atsc708Decoder {
         .filter((value) => value.length > 0)
         .join('\n');
       if (text.length === 0) continue;
-      if (!best || text.length > best.text.length) {
-        best = { service: index + 1, windows, text };
-      }
+      list.push({ service: index + 1, windows, text });
     }
-    if (!best) return undefined;
+    return list;
+  }
+
+  snapshot(): Atsc708Snapshot | undefined {
+    let best: Atsc708Snapshot | undefined;
+    for (const snapshot of this.snapshots()) {
+      if (!best || snapshot.text.length > best.text.length) best = snapshot;
+    }
     return best;
   }
 }

@@ -84,8 +84,8 @@ function parseSegmentFields(
     case 0x13: {
       if (body.length < 3) return undefined;
       fields.objectId = readU16(body, 0);
-      fields.codingMethod = (readU8(body, 2) >> 6) & 0x03;
-      fields.nonModifyingColor = (readU8(body, 2) & 0x20) !== 0;
+      fields.codingMethod = (readU8(body, 2) >> 2) & 0x03;
+      fields.nonModifyingColor = (readU8(body, 2) & 0x02) !== 0;
       if (fields.codingMethod === 0 && body.length >= 7) {
         fields.topFieldLength = readU16(body, 3);
         fields.bottomFieldLength = readU16(body, 5);
@@ -146,10 +146,8 @@ export function indexDvbSubtitlePes(payload: Uint8Array): DvbSubtitleIndex | nul
     }
 
     const type = payload[cursor + 1] as number;
-    const pageId =
-      ((payload[cursor + 2] as number) << 8) | (payload[cursor + 3] as number);
-    const length =
-      ((payload[cursor + 4] as number) << 8) | (payload[cursor + 5] as number);
+    const pageId = ((payload[cursor + 2] as number) << 8) | (payload[cursor + 3] as number);
+    const length = ((payload[cursor + 4] as number) << 8) | (payload[cursor + 5] as number);
     const start = cursor + 6;
     const end = Math.min(payload.length, start + length);
     const body = payload.subarray(start, end);

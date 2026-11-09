@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import type { DescriptorInfo } from '@tsinspect/core';
-import { useT, type UiKey } from '../i18n';
+import { Fragment, type ReactNode, useEffect, useState } from 'react';
 import { humanizeField, readableLanguages } from '../format';
+import { type UiKey, useT } from '../i18n';
 
 const FIELD_LABEL_KEYS: Record<string, UiKey> = {
   componentTag: 'table.field.componentTag',
@@ -149,7 +149,10 @@ export function DataTable<T>({
         <div className="table-toolbar-left">{toolbar}</div>
         <details className="column-menu">
           <summary>
-            {t('table.columns')} <span>{visible.length}/{columns.length}</span>
+            {t('table.columns')}{' '}
+            <span>
+              {visible.length}/{columns.length}
+            </span>
           </summary>
           <div className="column-popover">
             {columns.map((column) => {
@@ -183,9 +186,7 @@ export function DataTable<T>({
                   <th
                     key={column.key}
                     className={column.align === 'num' ? 'num' : undefined}
-                    aria-sort={
-                      active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'
-                    }
+                    aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
                   >
                     {column.sortValue ? (
                       <button
@@ -208,10 +209,7 @@ export function DataTable<T>({
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td
-                  colSpan={Math.max(1, visible.length + (expand ? 1 : 0))}
-                  className="empty-cell"
-                >
+                <td colSpan={Math.max(1, visible.length + (expand ? 1 : 0))} className="empty-cell">
                   {empty ?? t('table.empty')}
                 </td>
               </tr>
@@ -222,10 +220,7 @@ export function DataTable<T>({
                 return (
                   <Fragment key={key}>
                     <tr
-                      className={[
-                        rowClassName?.(row) ?? '',
-                        onRowClick ? 'row-clickable' : '',
-                      ]
+                      className={[rowClassName?.(row) ?? '', onRowClick ? 'row-clickable' : '']
                         .filter(Boolean)
                         .join(' ')}
                       tabIndex={onRowClick ? 0 : undefined}
@@ -264,10 +259,7 @@ export function DataTable<T>({
                         </td>
                       ) : null}
                       {visible.map((column) => (
-                        <td
-                          key={column.key}
-                          className={column.align === 'num' ? 'num' : undefined}
-                        >
+                        <td key={column.key} className={column.align === 'num' ? 'num' : undefined}>
                           {column.render(row)}
                         </td>
                       ))}
@@ -295,6 +287,7 @@ export function streamAccessibility(descriptors: DescriptorInfo[]): {
   easyReader: boolean;
   wideAspectRatio: boolean;
   language?: string;
+  audioServiceType?: string;
 } {
   let audioDescription = false;
   let spokenSubtitles = false;
@@ -303,6 +296,7 @@ export function streamAccessibility(descriptors: DescriptorInfo[]): {
   let wideAspectRatio = false;
   let language: string | undefined;
   let fallbackLanguage: string | undefined;
+  let audioServiceType: string | undefined;
   for (const descriptor of descriptors) {
     const fields = descriptor.fields ?? {};
     if (fields.audioDescription === true) audioDescription = true;
@@ -310,6 +304,10 @@ export function streamAccessibility(descriptors: DescriptorInfo[]): {
     if (fields.hearingImpaired === true) hearingImpaired = true;
     if (fields.easyReader === true) easyReader = true;
     if (fields.wideAspectRatio === true) wideAspectRatio = true;
+    if (audioServiceType === undefined && typeof fields.audioServiceTypeName === 'string') {
+      const name = fields.audioServiceTypeName.trim();
+      if (name.length > 0) audioServiceType = name;
+    }
     const names = [
       fields.audioServiceTypeName,
       fields.editorialClassificationName,
@@ -348,6 +346,7 @@ export function streamAccessibility(descriptors: DescriptorInfo[]): {
     hearingImpaired,
     easyReader,
     wideAspectRatio,
+    ...(audioServiceType !== undefined ? { audioServiceType } : {}),
     ...(language !== undefined
       ? { language }
       : fallbackLanguage !== undefined
@@ -366,7 +365,11 @@ export function AccessibilityCell({
   const t = useT();
   const traits = streamAccessibility(descriptors);
   const badges: Array<{ key: string; label: string }> = [];
-  if (traits.audioDescription) {
+  // ATSC audio_service_type names the track's purpose; "visually impaired"
+  // is echoed verbatim so the PID is recognisable at a glance.
+  if (traits.audioServiceType && /visually impaired/i.test(traits.audioServiceType)) {
+    badges.push({ key: 'audio-description', label: traits.audioServiceType });
+  } else if (traits.audioDescription) {
     badges.push({ key: 'audio-description', label: t('audio.audioDescription') });
   }
   if (traits.spokenSubtitles) {
@@ -375,10 +378,7 @@ export function AccessibilityCell({
   if (traits.hearingImpaired) {
     badges.push({
       key: 'hearing-impaired',
-      label:
-        kind === 'subtitle'
-          ? t('audio.hearingImpairedSubtitle')
-          : t('audio.hearingImpaired'),
+      label: kind === 'subtitle' ? t('audio.hearingImpairedSubtitle') : t('audio.hearingImpaired'),
     });
   }
   if (traits.easyReader) {

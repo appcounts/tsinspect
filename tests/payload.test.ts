@@ -416,6 +416,51 @@ describe('ISDB-Tb captions and DVB subtitles', () => {
     expect(acps?.text).toBe('コ');
   });
 
+  it('decodes the SWF vertical writing format and cell metrics', () => {
+    // SWF 10 (720x480 vertical), SSM 16;16, SHS 2, SVS 8, SDF 48;144,
+    // SDP 300;300, then two Latin lines.
+    const payload = aribPayload([
+      0x0c,
+      0x9b, 0x31, 0x30, 0x53,
+      0x9b, 0x31, 0x36, 0x3b, 0x31, 0x36, 0x57,
+      0x9b, 0x32, 0x58,
+      0x9b, 0x38, 0x59,
+      0x9b, 0x34, 0x38, 0x3b, 0x31, 0x34, 0x34, 0x56,
+      0x9b, 0x33, 0x30, 0x30, 0x3b, 0x33, 0x30, 0x30, 0x5f,
+      0x74, 0x65, 0x73, 0x74, 0x0a,
+      0x56, 0x65, 0x72, 0x74, 0x69, 0x63, 0x61, 0x6c,
+    ]);
+    const caption = extractAribCaptionStyled(payload, 'brazil');
+    expect(caption?.display).toMatchObject({
+      format: 10,
+      vertical: true,
+      planeWidth: 720,
+      planeHeight: 480,
+      width: 48,
+      height: 144,
+      x: 300,
+      y: 300,
+      fontWidth: 16,
+      fontHeight: 16,
+      horizontalSpacing: 2,
+      verticalSpacing: 8,
+    });
+    expect(caption?.metrics).toMatchObject({
+      planeWidth: 720,
+      planeHeight: 480,
+      fontWidth: 16,
+      fontHeight: 16,
+      horizontalSpacing: 2,
+      verticalSpacing: 8,
+      charWidth: 18,
+      charHeight: 24,
+    });
+    expect(caption?.lines.map((line) => line.runs[0]?.text)).toEqual([
+      'test',
+      'Vertical',
+    ]);
+  });
+
   it('decodes ARIB underline, ornament and font style', () => {
     // CS, STL underline, CSI 1 d (bold), CSI 2;7 c (shadow, white), コ
     const payload = aribPayload([

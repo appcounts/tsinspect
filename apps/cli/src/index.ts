@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { Command, InvalidArgumentError } from 'commander';
 import { startServer } from '@tsinspect/server/app';
-import { probeBuffer, formatBytes, hex16, type ProbeResult, type ProbeTable } from '@tsinspect/core';
+import {
+  probeBuffer,
+  formatBytes,
+  hex16,
+  resolveAribProfile,
+  type ProbeResult,
+  type ProbeTable,
+} from '@tsinspect/core';
 import {
   collectScte35Timeline,
-  collectTeletextPages,
   detectPacketLayout,
-  extractAribCaptionText,
-  indexDvbSubtitlePes,
   indexPesStreams,
-  parseTeletextPes,
   type Scte35Timeline,
   type Scte35TimelineEvent,
 } from '@tsinspect/core';
@@ -328,11 +331,7 @@ program
       const { data, result } = await loadSourceAndProbe(source, options);
       const layout = detectPacketLayout(data);
       if (!layout) throw new Error('No MPEG-TS sync pattern found in the sampled data.');
-      const profile =
-        options.profile === 'brazil' ||
-        (options.profile !== 'japan' && result.packet.size === 204)
-          ? 'brazil'
-          : 'japan';
+      const profile = resolveAribProfile(result, options.profile);
       const extracted = await runExtract(data, layout, result, {
         kind: options.kind,
         ...(options.pid !== undefined ? { pids: options.pid } : {}),

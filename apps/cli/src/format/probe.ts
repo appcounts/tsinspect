@@ -8,12 +8,7 @@ import type {
   ProbeService,
   ProbeTable,
 } from '@tsinspect/core';
-import {
-  formatBitrate,
-  formatBytes,
-  formatDuration,
-  hex16,
-} from '@tsinspect/core';
+import { formatBitrate, formatBytes, formatDuration, hex16 } from '@tsinspect/core';
 
 export interface TextFormatOptions {
   /** Include descriptor raw bytes, all evidence and every PID/table row. */
@@ -76,7 +71,8 @@ export function formatProbeText(result: ProbeResult, options: TextFormatOptions 
   if (transport.length > 0) lines.push(label('Transport', transport.join(', ')));
 
   const timing: string[] = [];
-  if (result.transport.pcrPid !== undefined) timing.push(`PCR PID ${hex16(result.transport.pcrPid)}`);
+  if (result.transport.pcrPid !== undefined)
+    timing.push(`PCR PID ${hex16(result.transport.pcrPid)}`);
   if (result.transport.durationSec !== undefined) {
     timing.push(`duration ${formatDuration(result.transport.durationSec)}`);
   }
@@ -97,8 +93,12 @@ export function formatProbeText(result: ProbeResult, options: TextFormatOptions 
     } else if (clock.localOffsetSec !== undefined) {
       const sign = clock.localOffsetSec < 0 ? '-' : '+';
       const absolute = Math.abs(clock.localOffsetSec);
-      const hours = Math.floor(absolute / 3600).toString().padStart(2, '0');
-      const minutes = Math.floor((absolute % 3600) / 60).toString().padStart(2, '0');
+      const hours = Math.floor(absolute / 3600)
+        .toString()
+        .padStart(2, '0');
+      const minutes = Math.floor((absolute % 3600) / 60)
+        .toString()
+        .padStart(2, '0');
       parts.push(`local offset ${sign}${hours}:${minutes}`);
     }
     if (clock.countryCode) parts.push(`country ${clock.countryCode}`);
@@ -117,7 +117,9 @@ export function formatProbeText(result: ProbeResult, options: TextFormatOptions 
   if (result.capabilities.scte35) caps.push('SCTE-35');
   if (result.capabilities.scrambled) caps.push('scrambled');
   if (result.capabilities.caSystems.length > 0) {
-    caps.push(`CA ${result.capabilities.caSystems.map((id) => `0x${id.toString(16).padStart(4, '0').toUpperCase()}`).join('/')}`);
+    caps.push(
+      `CA ${result.capabilities.caSystems.map((id) => `0x${id.toString(16).padStart(4, '0').toUpperCase()}`).join('/')}`,
+    );
   }
   lines.push(label('Capabilities', caps.length > 0 ? caps.join(', ') : 'none detected'));
 
@@ -151,6 +153,32 @@ export function formatProbeText(result: ProbeResult, options: TextFormatOptions 
       parts.push(
         `EWBS ${result.emergency.ewbs.activated ? 'active' : 'inactive'}, ${result.emergency.ewbs.services.length} service(s), ${started} started`,
       );
+    }
+    if (result.emergency.ews) {
+      const ews = result.emergency.ews;
+      const names = [
+        ...new Set(
+          ews.regions.map((region) => {
+            const disaster = ews.disasters.find(
+              (entry) => entry.disasterCode === region.disasterCode,
+            );
+            return disaster?.name || `0x${region.disasterCode.toString(16)}`;
+          }),
+        ),
+      ];
+      parts.push(
+        `EWS PID ${hex16(ews.pid)} ${names.join('/') || '-'}: ${ews.regions.length} region(s), ${ews.disasters.length} disaster(s), ${ews.messages.length} message(s)`,
+      );
+    }
+    if (result.emergency.timeline && result.emergency.timeline.length > 0) {
+      for (const segment of result.emergency.timeline) {
+        const range = `${formatDuration(segment.startSec)}-${
+          segment.endSec === undefined ? 'ongoing' : formatDuration(segment.endSec)
+        }`;
+        const level = segment.level !== undefined ? ` L${segment.level}` : '';
+        const info = [segment.title, segment.areas].filter(Boolean).join(' · ');
+        parts.push(`${range} ${segment.kind}${level}${info ? ` ${info}` : ''}`);
+      }
     }
     if (parts.length > 0) lines.push(label('Emergency', parts.join('; ')));
   }
@@ -209,10 +237,13 @@ function formatRatings(regions: ProbeRatingRegion[]): string[] {
     const name = region.name ? ` "${region.name}"` : '';
     const dimensions =
       region.dimensions.length === 1 ? '1 dimension' : `${region.dimensions.length} dimensions`;
-    lines.push(`  RRT${region.ratingRegion}${name}   protocol ${region.protocolVersion}, ${dimensions}`);
+    lines.push(
+      `  RRT${region.ratingRegion}${name}   protocol ${region.protocolVersion}, ${dimensions}`,
+    );
     for (const dimension of region.dimensions) {
       const scale = dimension.graduatedScale ? 'graduated' : 'litteral';
-      const values = dimension.values.length === 1 ? '1 value' : `${dimension.values.length} values`;
+      const values =
+        dimension.values.length === 1 ? '1 value' : `${dimension.values.length} values`;
       lines.push(`      ${dimension.name || '(unnamed)'} (${scale}, ${values})`);
       for (const value of dimension.values) {
         const abbrev = value.abbrev || '-';
@@ -322,12 +353,7 @@ function formatService(service: ProbeService, all: boolean): string[] {
     ];
   });
   const table = renderTable(
-    [
-      { header: 'PID' },
-      { header: 'Type' },
-      { header: 'Description' },
-      { header: 'Descriptors' },
-    ],
+    [{ header: 'PID' }, { header: 'Type' }, { header: 'Description' }, { header: 'Descriptors' }],
     rows,
     '        ',
   );
@@ -388,10 +414,7 @@ function formatEventDuration(seconds: number): string {
 }
 
 /** Compact table index used by `tsinspect tables`. */
-export function formatTableIndexText(
-  result: ProbeResult,
-  options: TextFormatOptions = {},
-): string {
+export function formatTableIndexText(result: ProbeResult, options: TextFormatOptions = {}): string {
   const lines: string[] = [];
   lines.push(`tsinspect ${result.tool.version} - MPEG-TS table index`);
   lines.push('');

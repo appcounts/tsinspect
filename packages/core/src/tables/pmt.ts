@@ -2,7 +2,6 @@ import type { DescriptorInfo } from '../model/types.js';
 import {
   describeDescriptors,
   parseRawDescriptors,
-  type RawDescriptor,
   type TextEncoding,
 } from '../descriptors/descriptor.js';
 import { streamTypeName } from '../ts/packet.js';

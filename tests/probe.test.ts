@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { crc32Mpeg2, probeBuffer } from '@tsinspect/core';
+import { describe, expect, it } from 'vitest';
 import {
   atscMss,
   buildPacket,
@@ -69,7 +69,13 @@ describe('probeBuffer', () => {
   it('reports monotonic packet progress', () => {
     const chunk = buildStream();
     const data = concat(Array.from({ length: 800 }, () => chunk));
-    const reports: Array<{ pass: number; packets: number; totalPackets: number; bytes: number; totalBytes: number }> = [];
+    const reports: Array<{
+      pass: number;
+      packets: number;
+      totalPackets: number;
+      bytes: number;
+      totalBytes: number;
+    }> = [];
     probeBuffer(data, {
       name: 'progress.ts',
       kind: 'buffer',
@@ -98,7 +104,10 @@ describe('probeBuffer', () => {
     expect(result.transport.networkPid).toBe(0x0010);
     expect(result.transport.packetCount).toBeGreaterThan(0);
     expect(result.transport.durationSec).toBeCloseTo(1, 6);
-    expect(result.transport.bitrateBps).toBeCloseTo((result.transport.packetCount * 188 * 8) / 1, 3);
+    expect(result.transport.bitrateBps).toBeCloseTo(
+      (result.transport.packetCount * 188 * 8) / 1,
+      3,
+    );
     expect(result.pids.find((pid) => pid.pid === 0x0000)?.kind).toBe('PAT');
     expect(result.pids.find((pid) => pid.pid === 0x0000)?.firstPacketOffset).toBe(0);
     expect(result.pids.find((pid) => pid.pid === 0x1000)?.kind).toBe('PMT');
@@ -196,7 +205,7 @@ describe('probeBuffer', () => {
     const rrt = buildSection(0xca, body, { tableIdExtension: 0xff05 });
 
     const title = atscMss('News');
-    const advisory = descriptor(0x87, Uint8Array.from([0x05, 0x01, 0x00, 0x00]));
+    const advisory = descriptor(0x87, Uint8Array.from([0xc1, 0x05, 0x01, 0x00, 0xf0, 0x00]));
     const event = concat([
       Uint8Array.from([0x00, 0x01]), // event id
       Uint8Array.from([0x00, 0x00, 0x00, 0x00]), // start time
@@ -220,7 +229,7 @@ describe('probeBuffer', () => {
     expect(result.ratings?.[0]?.ratingRegion).toBe(5);
     expect(result.ratings?.[0]?.name).toBe('USA');
     expect(result.ratings?.[0]?.dimensions[0]?.values[0]?.abbrev).toBe('PG-13');
-    expect(result.events[0]?.rating).toBe('RRT5 MPAA PG-13');
+    expect(result.events[0]?.rating).toBe('RRT5 (USA): MPAA = PG-13');
     const table = result.tables.find((entry) => entry.tableId === 0xca);
     expect(table?.fields?.ratingRegion).toBe(5);
     expect(table?.fields?.regionName).toBe('USA');
@@ -258,11 +267,9 @@ describe('probeBuffer', () => {
     const atscPat = buildSection(0x00, patBody([{ programNumber: 1, pid: 0x1000 }]), {
       tableIdExtension: 0x1234,
     });
-    const atscPmt = buildSection(
-      0x02,
-      pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]),
-      { tableIdExtension: 1 },
-    );
+    const atscPmt = buildSection(0x02, pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]), {
+      tableIdExtension: 1,
+    });
     const atsc = probeBuffer(
       concat([
         ...packetizeSection(0x0000, atscPat),
@@ -439,11 +446,9 @@ describe('probeBuffer', () => {
       Uint8Array.from([0xf0, 0x00]),
     ]);
     const bat = buildSection(0x4a, batBody, { tableIdExtension: 0x0042 });
-    const rst = buildSection(
-      0x71,
-      Uint8Array.from([0x00, 0x01, 0x00, 0x02, 0x80]),
-      { long: false },
-    );
+    const rst = buildSection(0x71, Uint8Array.from([0x00, 0x01, 0x00, 0x02, 0x80]), {
+      long: false,
+    });
     const data = concat([
       base,
       ...packetizeSection(0x0011, bat, 1),
@@ -524,8 +529,7 @@ interface EitEventSpec {
 
 function eitSection(tableId: number, serviceId: number, events: EitEventSpec[]): Uint8Array {
   const entries = events.map((event) => {
-    const desc =
-      event.name !== undefined ? shortEvent(event.name, event.text) : new Uint8Array(0);
+    const desc = event.name !== undefined ? shortEvent(event.name, event.text) : new Uint8Array(0);
     const body = new Uint8Array(12 + desc.length);
     body[0] = (event.eventId >> 8) & 0xff;
     body[1] = event.eventId & 0xff;
@@ -615,21 +619,15 @@ describe('EIT present/following and schedule merging', () => {
 
 describe('cross-table consistency diagnostics', () => {
   it('flags TSID/ONID mismatch, SDT other differences and unreferenced PIDs', () => {
-    const pat = buildSection(
-      0x00,
-      patBody([{ programNumber: 1, pid: 0x1000 }]),
-      { tableIdExtension: 0x1234 },
-    );
-    const pmt = buildSection(
-      0x02,
-      pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]),
-      { tableIdExtension: 1 },
-    );
-    const sdtActual = buildSection(
-      0x42,
-      sdtBody(0x2000, [{ serviceId: 1, name: 'One' }]),
-      { tableIdExtension: 0x9999 },
-    );
+    const pat = buildSection(0x00, patBody([{ programNumber: 1, pid: 0x1000 }]), {
+      tableIdExtension: 0x1234,
+    });
+    const pmt = buildSection(0x02, pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]), {
+      tableIdExtension: 1,
+    });
+    const sdtActual = buildSection(0x42, sdtBody(0x2000, [{ serviceId: 1, name: 'One' }]), {
+      tableIdExtension: 0x9999,
+    });
     const sdtOther = buildSection(
       0x46,
       sdtBody(0x2000, [

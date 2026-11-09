@@ -17,6 +17,9 @@
     "build": "corepack pnpm -r build",
     "build:exe": "node tools/build-exe.mjs",
     "typecheck": "tsc -p tsconfig.json",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
     "probe:atsc": "tsx apps/cli/src/index.ts probe .cache/streams/atsc-473.head.ts",
@@ -29,6 +32,7 @@
     "fixtures:204": "node tools/fetch-streams/fetch.mjs --head 8 isdb-tb-204"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
     "@playwright/test": "^1.52.0",
     "@types/node": "^24.13.6",
     "esbuild": "^0.28.2",

@@ -5,28 +5,26 @@
  * transcribed.
  */
 
+import { resolveAribProfile } from '../descriptors/arib-profile.js';
 import type { PacketLayout, ProbeResult, ProbeStream } from '../model/types.js';
-import { collectPesPackets } from '../pes/index.js';
 import type { PesPacket } from '../pes/assembler.js';
+import { collectPesPackets } from '../pes/index.js';
 import {
-  createAribDrcsContext,
-  extractAribCaptionStyled,
-  parseAribCaptionLanguages,
   type AribCaptionDisplay,
   type AribCaptionLanguage,
   type AribCaptionOptions,
   type AribDrcsGlyph,
   type AribFontMetrics,
   type AribTextLine,
+  createAribDrcsContext,
+  extractAribCaptionStyled,
+  parseAribCaptionLanguages,
 } from './arib-caption.js';
-import { parseAtscCaptionPayload } from './atsc-captions.js';
 import { Atsc608Decoder, type Atsc608Snapshot } from './atsc-608.js';
-import {
-  Atsc708Decoder,
-  type Atsc708Snapshot,
-  type Atsc708WindowSnapshot,
-} from './atsc-708.js';
+import { Atsc708Decoder, type Atsc708Snapshot } from './atsc-708.js';
+import { parseAtscCaptionPayload } from './atsc-captions.js';
 import { indexDvbSubtitlePes } from './dvb-subtitle.js';
+import { collectDvbSubtitleTimeline } from './dvb-subtitle-render.js';
 import {
   parseTeletextPes,
   TeletextCollector,
@@ -35,7 +33,6 @@ import {
   type TeletextPageLink,
 } from './teletext.js';
 import { buildTeletextLayer, type TeletextLayer } from './teletext-render.js';
-import { collectDvbSubtitleTimeline } from './dvb-subtitle-render.js';
 import { parseVbiPes } from './vbi.js';
 
 export type SubtitleFormat =
@@ -297,7 +294,7 @@ export interface SubtitleReport {
 }
 
 export interface SubtitleReportOptions {
-  /** ARIB text profile; defaults to SBTVD for 204-byte streams. */
+  /** ARIB text profile; auto uses the signalled country, then packet size. */
   profile?: 'japan' | 'brazil';
   /** Per-stream cue cap. */
   maxCuesPerStream?: number;
@@ -325,8 +322,7 @@ function detectFormat(stream: ProbeStream): SubtitleFormat | undefined {
   if (
     stream.descriptors.some(
       (descriptor) =>
-        descriptor.tag === 0xfd &&
-        ARIB_CAPTION_IDS.has(Number(descriptor.fields?.dataComponentId)),
+        descriptor.tag === 0xfd && ARIB_CAPTION_IDS.has(Number(descriptor.fields?.dataComponentId)),
     )
   ) {
     return 'arib-caption';
@@ -342,8 +338,7 @@ function cleanCueText(text: string): string {
     .join('\n');
 }
 
-const BASE64_ALPHABET =
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 function encodeBase64(data: Uint8Array): string {
   let output = '';
@@ -374,11 +369,10 @@ function teletextCues(
   packets: PesPacket[],
   maxCues: number,
 ): {
-  cues: SubtitleCue[];
-  truncated: boolean;
+  byLabel: Map<string, { cues: SubtitleCue[]; frames: SubtitlePreviewFrame[]; truncated: boolean }>;
   pages: TeletextPage[];
-  frames: SubtitlePreviewFrame[];
   browse: TeletextBrowse;
+  truncated: boolean;
 } {
   const collector = new TeletextCollector();
   const pages: TeletextPage[] = [];
@@ -398,8 +392,10 @@ function teletextCues(
     else byLabel.set(page.label, [page]);
   }
 
-  const cues: SubtitleCue[] = [];
-  const frames: SubtitlePreviewFrame[] = [];
+  const result = new Map<
+    string,
+    { cues: SubtitleCue[]; frames: SubtitlePreviewFrame[]; truncated: boolean }
+  >();
   let truncated = false;
 
   for (const [label, list] of byLabel) {
@@ -416,6 +412,9 @@ function teletextCues(
       unique.push(page);
     }
 
+    const cues: SubtitleCue[] = [];
+    const frames: SubtitlePreviewFrame[] = [];
+    let labelTruncated = false;
     for (let index = 0; index < unique.length; index += 1) {
       const page = unique[index] as TeletextPage;
       const start = page.updateTime ?? page.startTime ?? 0;
@@ -435,20 +434,20 @@ function teletextCues(
         });
       }
       if (cues.length >= maxCues) {
+        labelTruncated = true;
         truncated = true;
         break;
       }
     }
-    if (truncated) break;
+    cues.sort((a, b) => a.start - b.start);
+    frames.sort((a, b) => a.start - b.start);
+    result.set(label, { cues, frames, truncated: labelTruncated });
   }
 
-  cues.sort((a, b) => a.start - b.start);
-  frames.sort((a, b) => a.start - b.start);
   return {
-    cues,
+    byLabel: result,
     truncated,
     pages,
-    frames,
     browse: teletextBrowse(pages),
   };
 }
@@ -467,9 +466,7 @@ function teletextBrowse(pages: TeletextPage[]): TeletextBrowse {
     const previousStamp = previous?.updateTime ?? previous?.startTime ?? -1;
     if (!previous || stamp >= previousStamp) latest.set(page.label, page);
   }
-  const all = [...latest.values()].sort(
-    (a, b) => a.magazine - b.magazine || a.page - b.page,
-  );
+  const all = [...latest.values()].sort((a, b) => a.magazine - b.magazine || a.page - b.page);
   const shown = all.slice(0, TELETEXT_BROWSE_LIMIT).map((page) => ({
     label: page.label,
     magazine: page.magazine,
@@ -525,9 +522,7 @@ function aribCues(
   drcs: boolean;
   languages: AribCaptionLanguage[];
 } {
-  const ordered = [...packets].sort(
-    (a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0),
-  );
+  const ordered = [...packets].sort((a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0));
   const drcsContext = createAribDrcsContext();
   const options: AribCaptionOptions = {
     drcs: drcsContext,
@@ -574,10 +569,7 @@ function aribCues(
     const nextStart = entries[index + 1]?.start;
     return {
       start: entry.start,
-      end:
-        nextStart !== undefined && nextStart > entry.start
-          ? nextStart
-          : entry.start + 5,
+      end: nextStart !== undefined && nextStart > entry.start ? nextStart : entry.start + 5,
       text: entry.text,
     };
   });
@@ -693,8 +685,7 @@ function atsc708Windows(
   return snapshot.windows.map((window) => {
     const windowWidth = window.columnCount * charWidth;
     const windowHeight = window.rowCount * charHeight;
-    const relative =
-      window.relative || window.anchorVertical > 74 || window.anchorHorizontal > 209;
+    const relative = window.relative || window.anchorVertical > 74 || window.anchorHorizontal > 209;
     const anchorX = relative
       ? (window.anchorHorizontal / 100) * width
       : (window.anchorHorizontal / 209) * width;
@@ -752,65 +743,58 @@ function atscCues(
   width: number,
   height: number,
 ): {
-  cues608: SubtitleCue[];
-  cues708: SubtitleCue[];
-  frames608: Atsc608PreviewFrame[];
-  frames708: Atsc708PreviewFrame[];
+  groups608: Array<{ channel: number; cues: SubtitleCue[]; frames: Atsc608PreviewFrame[] }>;
+  groups708: Array<{ service: number; cues: SubtitleCue[]; frames: Atsc708PreviewFrame[] }>;
   truncated: boolean;
   dtvccBytes: number;
-  channel608?: number;
-  service708?: number;
 } {
-  const ordered = [...packets].sort(
-    (a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0),
-  );
+  const ordered = [...packets].sort((a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0));
   const decoder608 = new Atsc608Decoder();
   const decoder708 = new Atsc708Decoder();
-  const entries608: Atsc608Entry[] = [];
-  const entries708: Atsc708Entry[] = [];
-  let last608 = '';
-  let last708 = '';
+  const entries608 = new Map<number, Atsc608Entry[]>();
+  const entries708 = new Map<number, Atsc708Entry[]>();
+  const last608 = new Map<number, string>();
+  const last708 = new Map<number, string>();
   let dtvccBytes = 0;
-  let last708Text = '';
+
+  const append = <T>(store: Map<number, T[]>, key: number, entry: T): void => {
+    const entries = store.get(key) ?? [];
+    entries.push(entry);
+    store.set(key, entries);
+  };
 
   for (const pes of ordered) {
     const caption = parseAtscCaptionPayload(pes.payload);
     if (!caption) continue;
+    const start = pes.ptsSeconds ?? 0;
     dtvccBytes += caption.dtvccBytes;
     decoder608.pushUnits(caption.units);
     decoder708.pushUnits(caption.units);
 
-    const snapshot608 = decoder608.snapshot();
-    if (snapshot608) {
-      const signature = atsc608Signature(snapshot608);
-      if (signature !== last608) {
-        last608 = signature;
-        entries608.push({
-          start: pes.ptsSeconds ?? 0,
-          snapshot: snapshot608,
-          signature,
-        });
-      }
+    // Each 608 channel keeps its own timeline so CC1–CC4 are separate streams.
+    for (const snapshot of decoder608.snapshots()) {
+      const signature = atsc608Signature(snapshot);
+      if (signature === (last608.get(snapshot.channel) ?? '')) continue;
+      last608.set(snapshot.channel, signature);
+      append(entries608, snapshot.channel, { start, snapshot, signature });
     }
 
-    const snapshot708 = decoder708.snapshot();
-    if (snapshot708) {
-      const signature = atsc708Signature(snapshot708);
-      if (signature !== last708) {
-        last708 = signature;
-        last708Text = snapshot708.text;
-        entries708.push({
-          start: pes.ptsSeconds ?? 0,
-          snapshot: snapshot708,
-          signature,
-        });
-      }
-    } else if (last708Text.length > 0) {
-      last708 = '';
-      last708Text = '';
-      entries708.push({
-        start: pes.ptsSeconds ?? 0,
-        snapshot: { service: 1, windows: [], text: '' },
+    // 708 snapshots only list services with visible text; a missing service
+    // that used to show text gets a clearing entry.
+    const visible708 = new Set<number>();
+    for (const snapshot of decoder708.snapshots()) {
+      visible708.add(snapshot.service);
+      const signature = atsc708Signature(snapshot);
+      if (signature === (last708.get(snapshot.service) ?? '')) continue;
+      last708.set(snapshot.service, signature);
+      append(entries708, snapshot.service, { start, snapshot, signature });
+    }
+    for (const [service, signature] of last708) {
+      if (signature.length === 0 || visible708.has(service)) continue;
+      last708.set(service, '');
+      append(entries708, service, {
+        start,
+        snapshot: { service, windows: [], text: '' },
         signature: '',
       });
     }
@@ -834,15 +818,12 @@ function atscCues(
     return cues;
   };
 
-  const cues608 = buildCues(entries608);
-  const cues708 = buildCues(entries708);
-
-  const buildFrames608 = (): Atsc608PreviewFrame[] => {
+  const buildFrames608 = (entries: Atsc608Entry[]): Atsc608PreviewFrame[] => {
     const frames: Atsc608PreviewFrame[] = [];
-    for (let index = 0; index < entries608.length && frames.length < 500; index += 1) {
-      const entry = entries608[index] as Atsc608Entry;
+    for (let index = 0; index < entries.length && frames.length < 500; index += 1) {
+      const entry = entries[index] as Atsc608Entry;
       if (entry.snapshot.text.trim().length === 0) continue;
-      const next = entries608[index + 1]?.start;
+      const next = entries[index + 1]?.start;
       frames.push({
         start: entry.start,
         end: next !== undefined && next > entry.start ? next : entry.start + 5,
@@ -853,12 +834,12 @@ function atscCues(
     return frames;
   };
 
-  const buildFrames708 = (): Atsc708PreviewFrame[] => {
+  const buildFrames708 = (entries: Atsc708Entry[]): Atsc708PreviewFrame[] => {
     const frames: Atsc708PreviewFrame[] = [];
-    for (let index = 0; index < entries708.length && frames.length < 500; index += 1) {
-      const entry = entries708[index] as Atsc708Entry;
+    for (let index = 0; index < entries.length && frames.length < 500; index += 1) {
+      const entry = entries[index] as Atsc708Entry;
       if (entry.snapshot.text.trim().length === 0) continue;
-      const next = entries708[index + 1]?.start;
+      const next = entries[index + 1]?.start;
       frames.push({
         start: entry.start,
         end: next !== undefined && next > entry.start ? next : entry.start + 5,
@@ -869,18 +850,31 @@ function atscCues(
     return frames;
   };
 
-  const first608 = entries608.find((entry) => entry.snapshot.text.trim().length > 0);
-  const first708 = entries708.find((entry) => entry.snapshot.text.trim().length > 0);
+  const groups608 = [...entries608.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([channel, entries]) => ({
+      channel,
+      cues: buildCues(entries),
+      frames: buildFrames608(entries),
+    }))
+    .filter((group) => group.cues.length > 0 || group.frames.length > 0);
+
+  const groups708 = [...entries708.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([service, entries]) => ({
+      service,
+      cues: buildCues(entries),
+      frames: buildFrames708(entries),
+    }))
+    .filter((group) => group.cues.length > 0 || group.frames.length > 0);
 
   return {
-    cues608,
-    cues708,
-    frames608: buildFrames608(),
-    frames708: buildFrames708(),
-    truncated: cues608.length >= maxCues || cues708.length >= maxCues,
+    groups608,
+    groups708,
+    truncated:
+      groups608.some((group) => group.cues.length >= maxCues) ||
+      groups708.some((group) => group.cues.length >= maxCues),
     dtvccBytes,
-    ...(first608 ? { channel608: first608.snapshot.channel } : {}),
-    ...(first708 ? { service708: first708.snapshot.service } : {}),
   };
 }
 
@@ -1001,59 +995,17 @@ function processStreamFormat(
     };
   }
 
-  if (format === 'vbi') {
-    let unitCount = 0;
-    let hasTeletext = false;
-    for (const pes of packets) {
-      const vbi = parseVbiPes(pes.payload);
-      if (!vbi) continue;
-      unitCount += vbi.units.length;
-      if (vbi.units.some((unit) => unit.id === 0x02 || unit.id === 0x03)) {
-        hasTeletext = true;
-      }
-    }
-    if (hasTeletext) {
-      const result = teletextCues(packets, maxCues);
-      return {
-        pid: stream.pid,
-        pidHex: stream.pidHex,
-        format: 'vbi-teletext',
-        formatName: FORMAT_NAMES['vbi-teletext'],
-        cues: result.cues,
-        cueCount: result.cues.length,
-        truncated: result.truncated,
-        unitCount,
-        ...(result.frames.length > 0 ? { preview: teletextPreview(result.frames) } : {}),
-        ...(result.browse.pages.length > 0 ? { browse: result.browse } : {}),
-      };
-    }
-    return {
-      pid: stream.pid,
-      pidHex: stream.pidHex,
-      format,
-      formatName: FORMAT_NAMES[format],
-      cues: [],
-      cueCount: 0,
-      truncated: false,
-      unitCount,
-      note: 'VBI data units are indexed, but no text subtitles are present.',
-    };
-  }
-
-  const result = teletextCues(packets, maxCues);
+  // No-op fallback: all known formats are handled above, but keep a default
+  // so TypeScript accepts the exhaustive return.
   return {
     pid: stream.pid,
     pidHex: stream.pidHex,
-    format: format === 'vbi-teletext' ? 'vbi-teletext' : 'teletext',
+    format,
     formatName: FORMAT_NAMES[format],
-    cues: result.cues,
-    cueCount: result.cues.length,
-    truncated: result.truncated,
-    ...(result.frames.length > 0 ? { preview: teletextPreview(result.frames) } : {}),
-    ...(result.browse.pages.length > 0 ? { browse: result.browse } : {}),
-    ...(result.cues.length === 0
-      ? { note: 'No subtitle pages found in the sampled Teletext data.' }
-      : {}),
+    cues: [],
+    cueCount: 0,
+    truncated: false,
+    note: `No decodable ${FORMAT_NAMES[format]} data in the sampled packets.`,
   };
 }
 
@@ -1068,55 +1020,55 @@ function processAtscStream(
   const result = atscCues(packets, maxCues, width, height);
   const reports: SubtitleStreamReport[] = [];
 
-  if (result.cues608.length > 0 || result.frames608.length > 0) {
+  for (const group of result.groups608) {
     reports.push({
       pid: stream.pid,
       pidHex: stream.pidHex,
       format: 'atsc-caption',
       category: 'caption',
       formatName: 'ATSC CEA-608 closed captions',
-      cues: result.cues608,
-      cueCount: result.cues608.length,
+      cues: group.cues,
+      cueCount: group.cues.length,
       truncated: result.truncated,
       mode: '608',
-      ...(result.channel608 ? { channel: result.channel608 } : {}),
-      ...(result.frames608.length > 0
+      channel: group.channel,
+      ...(group.frames.length > 0
         ? {
             preview: {
               kind: 'atsc608' as const,
               width,
               height,
-              frames: result.frames608,
-              truncated: result.frames608.length >= 500,
-              ...(result.channel608 ? { channel: result.channel608 } : {}),
+              frames: group.frames,
+              truncated: group.frames.length >= 500,
+              channel: group.channel,
             },
           }
         : {}),
     });
   }
 
-  if (result.cues708.length > 0 || result.frames708.length > 0) {
+  for (const group of result.groups708) {
     reports.push({
       pid: stream.pid,
       pidHex: stream.pidHex,
       format: 'atsc-caption',
       category: 'caption',
       formatName: 'ATSC CEA-708 closed captions',
-      cues: result.cues708,
-      cueCount: result.cues708.length,
+      cues: group.cues,
+      cueCount: group.cues.length,
       truncated: result.truncated,
       mode: '708',
       dtvccBytes: result.dtvccBytes,
-      ...(result.service708 ? { service: result.service708 } : {}),
-      ...(result.frames708.length > 0
+      service: group.service,
+      ...(group.frames.length > 0
         ? {
             preview: {
               kind: 'atsc708' as const,
               width,
               height,
-              frames: result.frames708,
-              truncated: result.frames708.length >= 500,
-              ...(result.service708 ? { service: result.service708 } : {}),
+              frames: group.frames,
+              truncated: group.frames.length >= 500,
+              service: group.service,
             },
           }
         : {}),
@@ -1141,6 +1093,106 @@ function processAtscStream(
   return reports;
 }
 
+function processTeletextStream(
+  stream: ProbeStream,
+  format: SubtitleFormat,
+  packets: PesPacket[],
+  maxCues: number,
+): SubtitleStreamReport[] {
+  let resolvedFormat: SubtitleFormat = format;
+  let unitCount: number | undefined;
+
+  if (format === 'vbi') {
+    let hasTeletext = false;
+    let units = 0;
+    for (const pes of packets) {
+      const vbi = parseVbiPes(pes.payload);
+      if (!vbi) continue;
+      units += vbi.units.length;
+      if (vbi.units.some((unit) => unit.id === 0x02 || unit.id === 0x03)) {
+        hasTeletext = true;
+      }
+    }
+    unitCount = units;
+    if (!hasTeletext) {
+      return [
+        {
+          pid: stream.pid,
+          pidHex: stream.pidHex,
+          format,
+          category: subtitleCategory(format),
+          formatName: FORMAT_NAMES[format],
+          cues: [],
+          cueCount: 0,
+          truncated: false,
+          unitCount,
+          note: 'VBI data units are indexed, but no text subtitles are present.',
+        },
+      ];
+    }
+    resolvedFormat = 'vbi-teletext';
+  }
+
+  const result = teletextCues(packets, maxCues);
+  const reports: SubtitleStreamReport[] = [];
+
+  if (result.byLabel.size === 0) {
+    reports.push({
+      pid: stream.pid,
+      pidHex: stream.pidHex,
+      format: resolvedFormat,
+      category: subtitleCategory(resolvedFormat),
+      formatName: FORMAT_NAMES[resolvedFormat],
+      cues: [],
+      cueCount: 0,
+      truncated: result.truncated,
+      ...(unitCount !== undefined ? { unitCount } : {}),
+      note: 'No subtitle pages found in the sampled Teletext data.',
+    });
+  } else {
+    // Filter out single-shot pages (cue count < 2) such as Teletext service
+    // announcements or coverage notices — these are not subtitle tracks even
+    // if they happen to carry a subtitle-layer row. A real subtitle track is
+    // refreshed repeatedly by the broadcaster.
+    const labels = [...result.byLabel.keys()]
+      .filter((label) => {
+        const group = result.byLabel.get(label)!;
+        return group.cues.length >= 2;
+      })
+      .sort((a, b) => {
+        const [aMagRaw, aPageRaw] = a.split(':').map((v) => Number.parseInt(v, 16));
+        const [bMagRaw, bPageRaw] = b.split(':').map((v) => Number.parseInt(v, 16));
+        const aMag = aMagRaw ?? 0;
+        const aPage = aPageRaw ?? 0;
+        const bMag = bMagRaw ?? 0;
+        const bPage = bPageRaw ?? 0;
+        return aMag - bMag || aPage - bPage;
+      });
+    for (const label of labels) {
+      const group = result.byLabel.get(label)!;
+      reports.push({
+        pid: stream.pid,
+        pidHex: stream.pidHex,
+        format: resolvedFormat,
+        category: subtitleCategory(resolvedFormat),
+        formatName: FORMAT_NAMES[resolvedFormat],
+        cues: group.cues,
+        cueCount: group.cues.length,
+        truncated: group.truncated || result.truncated,
+        ...(unitCount !== undefined ? { unitCount } : {}),
+        ...(group.frames.length > 0 ? { preview: teletextPreview(group.frames) } : {}),
+        // Only the first report carries the full-page browse tree so it is not
+        // duplicated for every magazine/page variant from the same PID.
+        ...(reports.length === 0 && result.browse.pages.length > 0
+          ? { browse: result.browse }
+          : {}),
+      });
+    }
+  }
+
+  return reports;
+}
+
 function processStream(
   stream: ProbeStream,
   format: SubtitleFormat,
@@ -1151,6 +1203,9 @@ function processStream(
 ): SubtitleStreamReport[] {
   if (format === 'atsc-caption') {
     return processAtscStream(stream, packets, maxCues, display);
+  }
+  if (format === 'teletext' || format === 'vbi-teletext' || format === 'vbi') {
+    return processTeletextStream(stream, format, packets, maxCues);
   }
   const report = processStreamFormat(stream, format, packets, profile, maxCues, display);
   return [{ ...report, category: subtitleCategory(report.format) }];
@@ -1164,8 +1219,7 @@ export function collectSubtitleReport(
   options: SubtitleReportOptions = {},
 ): SubtitleReport {
   const maxCues = options.maxCuesPerStream ?? 5000;
-  const profile =
-    options.profile ?? (result.packet.size === 204 ? 'brazil' : 'japan');
+  const profile = resolveAribProfile(result, options.profile ?? 'auto');
   const targets = new Set<number>();
   for (const service of result.services) {
     for (const stream of service.streams) {

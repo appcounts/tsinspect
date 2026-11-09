@@ -72,8 +72,22 @@ export interface AribCaptionDisplay {
   width?: number;
   /** Display region height in logical pixels (CSI SDF). */
   height?: number;
-  /** CSI SWF display format (0 = 4:3, 1 = 16:9). */
+  /** Raw CSI SWF writing-format parameter. */
   format?: number;
+  /** True when SWF selects vertical (top-to-bottom) writing. */
+  vertical?: boolean;
+  /** Logical plane width implied by SWF. */
+  planeWidth?: number;
+  /** Logical plane height implied by SWF. */
+  planeHeight?: number;
+  /** Character cell width in logical pixels (CSI SSM). */
+  fontWidth?: number;
+  /** Character cell height in logical pixels (CSI SSM). */
+  fontHeight?: number;
+  /** Inter-character spacing along the writing direction (CSI SHS). */
+  horizontalSpacing?: number;
+  /** Inter-line spacing across the writing direction (CSI SVS). */
+  verticalSpacing?: number;
 }
 
 /** Broadcast font metrics from ARIB STD-B24 A/C profiles. */
@@ -152,6 +166,20 @@ const FONT_METRICS_A: AribFontMetrics = {
   verticalSpacing: 24,
   charWidth: 40,
   charHeight: 60,
+};
+
+/**
+ * CSI SWF writing-format table (ARIB STD-B24 profile A). The parameter
+ * selects both the logical plane and the writing direction; even values are
+ * vertical. Unknown values keep the profile default plane and direction.
+ */
+const SWF_FORMATS: Record<number, { width: number; height: number; vertical: boolean }> = {
+  5: { width: 1920, height: 1080, vertical: false },
+  6: { width: 1920, height: 1080, vertical: true },
+  7: { width: 960, height: 540, vertical: false },
+  8: { width: 960, height: 540, vertical: true },
+  9: { width: 720, height: 480, vertical: false },
+  10: { width: 720, height: 480, vertical: true },
 };
 
 const FONT_METRICS_C: AribFontMetrics = {
@@ -234,9 +262,10 @@ interface CaptionState {
   /** Current ACPS position in logical pixels. */
   x?: number;
   y?: number;
-  /** Current character cell metrics (SSM/SHS/SVS). */
+  /** Current character glyph cell size (SSM). */
   charWidth?: number;
   charHeight?: number;
+  /** Current inter-character/inter-line spacing (SHS/SVS). */
   charGapX?: number;
   charGapY?: number;
   styled: boolean;
@@ -280,8 +309,10 @@ function freshState(metrics: AribFontMetrics): CaptionState {
     styled: false,
     usedDrcs: new Map(),
     pendingClear: false,
-    charWidth: metrics.charWidth,
-    charHeight: metrics.charHeight,
+    charWidth: metrics.fontWidth,
+    charHeight: metrics.fontHeight,
+    charGapX: metrics.horizontalSpacing,
+    charGapY: metrics.verticalSpacing,
   };
 }
 
@@ -441,8 +472,41 @@ function finishCaption(
   }));
 
   const trimmedDisplay = Object.fromEntries(
-    Object.entries(state.display).filter(([, value]) => value !== undefined),
+    Object.entries({
+      ...state.display,
+      ...(state.charWidth !== undefined ? { fontWidth: state.charWidth } : {}),
+      ...(state.charHeight !== undefined ? { fontHeight: state.charHeight } : {}),
+      ...(state.charGapX !== undefined ? { horizontalSpacing: state.charGapX } : {}),
+      ...(state.charGapY !== undefined ? { verticalSpacing: state.charGapY } : {}),
+    }).filter(([, value]) => value !== undefined),
   ) as AribCaptionDisplay;
+
+  const planeWidth = trimmedDisplay.planeWidth ?? metrics.planeWidth;
+  const planeHeight = trimmedDisplay.planeHeight ?? metrics.planeHeight;
+  const fontWidth = trimmedDisplay.fontWidth ?? metrics.fontWidth;
+  const fontHeight = trimmedDisplay.fontHeight ?? metrics.fontHeight;
+  const horizontalSpacing = trimmedDisplay.horizontalSpacing ?? metrics.horizontalSpacing;
+  const verticalSpacing = trimmedDisplay.verticalSpacing ?? metrics.verticalSpacing;
+  const scaleDisplayX = planeWidth / metrics.planeWidth;
+  const scaleDisplayY = planeHeight / metrics.planeHeight;
+
+  const effectiveMetrics: AribFontMetrics = {
+    ...metrics,
+    planeWidth,
+    planeHeight,
+    fontWidth,
+    fontHeight,
+    horizontalSpacing,
+    verticalSpacing,
+    charWidth: fontWidth + horizontalSpacing,
+    charHeight: fontHeight + verticalSpacing,
+    display: {
+      x: trimmedDisplay.x ?? metrics.display.x * scaleDisplayX,
+      y: trimmedDisplay.y ?? metrics.display.y * scaleDisplayY,
+      width: trimmedDisplay.width ?? metrics.display.width * scaleDisplayX,
+      height: trimmedDisplay.height ?? metrics.display.height * scaleDisplayY,
+    },
+  };
 
   return {
     text,
@@ -451,7 +515,7 @@ function finishCaption(
     styled: state.styled,
     offset,
     ...(state.usedDrcs.size > 0 ? { drcs: [...state.usedDrcs.values()] } : {}),
-    metrics,
+    metrics: effectiveMetrics,
   };
 }
 
@@ -624,12 +688,20 @@ function applySzx(state: CaptionState, code: number | undefined): void {
 
 function applyCsi(state: CaptionState, params: number[], final: number): void {
   switch (final) {
-    case 0x53: // SWF
-      if (params[0] !== undefined) {
-        state.display.format = params[0];
+    case 0x53: { // SWF writing format: plane size + writing direction.
+      const format = params[0];
+      if (format !== undefined) {
+        const swf = SWF_FORMATS[format];
+        state.display.format = format;
+        if (swf) {
+          state.display.vertical = swf.vertical;
+          state.display.planeWidth = swf.width;
+          state.display.planeHeight = swf.height;
+        }
         state.styled = true;
       }
       break;
+    }
     case 0x6e: // RCS raster colour
       if (params[0] !== undefined) {
         state.style.background = paletteColor(params[0]);
@@ -661,6 +733,7 @@ function applyCsi(state: CaptionState, params: number[], final: number): void {
     case 0x57: // SSM character cell size
       if (params[0] !== undefined) state.charWidth = params[0];
       if (params[1] !== undefined) state.charHeight = params[1];
+      state.styled = true;
       break;
     case 0x58: // SHS horizontal interval
       if (params[0] !== undefined) state.charGapX = params[0];
@@ -744,10 +817,10 @@ function applyControl(state: CaptionState, code: number, params: number[]): void
         // APS uses character-cell coordinates. When SSM supplied the cell
         // metrics, convert them to logical pixels for the renderer.
         if (state.charWidth !== undefined) {
-          state.line.x = state.charWidth * state.line.column;
+          state.line.x = (state.charWidth + (state.charGapX ?? 0)) * state.line.column;
         }
         if (state.charHeight !== undefined) {
-          state.line.y = state.charHeight * (state.line.row + 1);
+          state.line.y = (state.charHeight + (state.charGapY ?? 0)) * (state.line.row + 1);
         }
         state.styled = true;
       }

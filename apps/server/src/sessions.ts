@@ -1,9 +1,5 @@
 import type { PesPacket, ProbeResult, Scte35Timeline, SubtitleReport } from '@tsinspect/core';
-import {
-  SESSION_BUDGET_BYTES,
-  SESSION_IDLE_TIMEOUT_MS,
-  SESSION_SWEEP_MS,
-} from './config.js';
+import { SESSION_BUDGET_BYTES, SESSION_IDLE_TIMEOUT_MS, SESSION_SWEEP_MS } from './config.js';
 
 export interface TimelineBucket {
   startSec?: number;
@@ -97,12 +93,29 @@ function totalBytes(): number {
   return total;
 }
 
-/** Evict least-recently-used idle sessions until the byte budget holds. */
+/**
+ * Evict least-recently-used idle sessions until the byte budget holds.
+ * The most recently used session always survives: a single sample can be
+ * larger than the whole budget, and dropping it would break every on-demand
+ * request (subtitle frames, hex dumps) while the page still shows its report.
+ */
 function evictToBudget(protectId?: string): void {
   let total = totalBytes();
   if (total <= SESSION_BUDGET_BYTES) return;
+  let keep = protectId;
+  if (keep === undefined) {
+    let newestId: string | undefined;
+    let newestAccess = -Infinity;
+    for (const [id, entry] of entries) {
+      if (entry.lastAccess > newestAccess) {
+        newestAccess = entry.lastAccess;
+        newestId = id;
+      }
+    }
+    keep = newestId;
+  }
   const candidates = [...entries.entries()]
-    .filter(([id, entry]) => id !== protectId && entry.pins === 0)
+    .filter(([id, entry]) => id !== keep && entry.pins === 0)
     .sort((a, b) => a[1].lastAccess - b[1].lastAccess);
   for (const [id, entry] of candidates) {
     if (total <= SESSION_BUDGET_BYTES) break;

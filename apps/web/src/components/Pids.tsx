@@ -1,6 +1,6 @@
 import type { ProbePid } from '@tsinspect/core';
-import { useT } from '../i18n';
 import { formatBytes } from '../format';
+import { useT } from '../i18n';
 import { DataTable } from './shared';
 
 export function Pids({
@@ -31,8 +31,15 @@ export function Pids({
         {
           key: 'kind',
           label: t('pids.kind'),
-          render: (row) => row.kind ?? '-',
-          sortValue: (row) => row.kind ?? '',
+          render: (row) =>
+            row.audioServiceType ? (
+              <span>
+                {row.kind ?? '-'} <span className="badge info">{row.audioServiceType}</span>
+              </span>
+            ) : (
+              (row.kind ?? '-')
+            ),
+          sortValue: (row) => `${row.kind ?? ''} ${row.audioServiceType ?? ''}`,
         },
         {
           key: 'packets',

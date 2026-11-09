@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
 import {
   descriptorName,
   parseEmergencyInformationDescriptor,
+  parseEwsSection,
   parseScte18Eas,
   probeBuffer,
 } from '@tsinspect/core';
+import { describe, expect, it } from 'vitest';
 import {
   atscMss,
   buildPacket,
@@ -93,11 +94,9 @@ function ewbsDescriptorBody(): Uint8Array {
 }
 
 function buildEmergencyStream(): Uint8Array {
-  const pat = buildSection(
-    0x00,
-    patBody([{ programNumber: 1, pid: 0x1000 }]),
-    { tableIdExtension: 0x0001 },
-  );
+  const pat = buildSection(0x00, patBody([{ programNumber: 1, pid: 0x1000 }]), {
+    tableIdExtension: 0x0001,
+  });
   const pmt = buildSection(
     0x02,
     pmtBody(0x0100, [
@@ -134,9 +133,7 @@ describe('emergency alerting', () => {
     expect(eas?.durationSec).toBe(600);
     expect(eas?.natureOfActivation).toBe('Tornado Warning');
     expect(eas?.alertText).toBe('A tornado warning has been issued.');
-    expect(eas?.locations).toEqual([
-      { stateCode: 0x30, countySubdivision: 0, countyCode: 0x201 },
-    ]);
+    expect(eas?.locations).toEqual([{ stateCode: 0x30, countySubdivision: 0, countyCode: 0x201 }]);
     expect(eas?.crcValid).toBe(true);
   });
 
@@ -151,11 +148,9 @@ describe('emergency alerting', () => {
     const pat = buildSection(0x00, patBody([{ programNumber: 1, pid: 0x1000 }]), {
       tableIdExtension: 1,
     });
-    const pmt = buildSection(
-      0x02,
-      pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]),
-      { tableIdExtension: 1 },
-    );
+    const pmt = buildSection(0x02, pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]), {
+      tableIdExtension: 1,
+    });
     // Private data whose first payload byte after the pointer field is 0xD8 must
     // not turn an elementary stream PID into an EAS PID.
     const bogus = buildSection(0xd8, easBody(), { tableIdExtension: 0 });
@@ -178,11 +173,9 @@ describe('emergency alerting', () => {
     const pat = buildSection(0x00, patBody([{ programNumber: 1, pid: 0x1000 }]), {
       tableIdExtension: 1,
     });
-    const pmt = buildSection(
-      0x02,
-      pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]),
-      { tableIdExtension: 1 },
-    );
+    const pmt = buildSection(0x02, pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]), {
+      tableIdExtension: 1,
+    });
     // Present/following EIT: the 0xFC descriptor sits on the event, not the PMT.
     const eit = buildSection(
       0x4e,
@@ -203,21 +196,22 @@ describe('emergency alerting', () => {
     );
 
     expect(result.emergency?.ewbs?.activated).toBe(true);
-    expect(result.emergency?.ewbs?.services).toEqual([
+    expect(result.emergency?.ewbs?.services).toMatchObject([
       { serviceId: 1, started: true, signalLevel: 1, areaCodes: [0x123, 0x456] },
     ]);
     expect(result.services[0]?.ewbs?.started).toBe(true);
+    expect(result.emergency?.timeline).toMatchObject([
+      { kind: 'EWBS', startSec: 0, level: 1, title: 'service 1', areas: '291, 1110' },
+    ]);
   });
 
   it('merges locations across SCTE 18 sections of one alert', () => {
     const pat = buildSection(0x00, patBody([{ programNumber: 1, pid: 0x1000 }]), {
       tableIdExtension: 1,
     });
-    const pmt = buildSection(
-      0x02,
-      pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]),
-      { tableIdExtension: 1 },
-    );
+    const pmt = buildSection(0x02, pmtBody(0x0100, [{ streamType: 0x1b, pid: 0x0100 }]), {
+      tableIdExtension: 1,
+    });
     const first = buildSection(0xd8, easBody([[0x30, 0x201]]), {
       tableIdExtension: 0,
       sectionNumber: 0,
@@ -263,15 +257,205 @@ describe('emergency alerting', () => {
       priority: 5,
       timeRemainingSec: 44,
     });
-    expect(result.emergency?.eas?.[0]?.alertText).toBe(
-      'A tornado warning has been issued.',
-    );
+    expect(result.emergency?.eas?.[0]?.alertText).toBe('A tornado warning has been issued.');
     expect(result.emergency?.ewbs?.activated).toBe(true);
-    expect(result.emergency?.ewbs?.services).toEqual([
+    expect(result.emergency?.ewbs?.services).toMatchObject([
       { serviceId: 1, started: true, signalLevel: 1, areaCodes: [0x123, 0x456] },
     ]);
     expect(result.services[0]?.ewbs?.areaCodes).toEqual([0x123, 0x456]);
     expect(result.diagnostics.some((item) => item.code === 'EAS_ALERT_ACTIVE')).toBe(true);
     expect(result.diagnostics.some((item) => item.code === 'EWBS_ACTIVE')).toBe(true);
+    expect(result.emergency?.timeline).toMatchObject([
+      {
+        kind: 'EAS',
+        startSec: 0,
+        endSec: 600,
+        level: 5,
+        title: 'TOR - A tornado warning has been issued.',
+      },
+      { kind: 'EWBS', startSec: 0, level: 1, title: 'service 1' },
+    ]);
+  });
+});
+
+function lengthPrefixed(text: string): Uint8Array {
+  const bytes = ascii(text);
+  return concat([Uint8Array.from([bytes.length]), bytes]);
+}
+
+function lengthPrefixed16(text: string): Uint8Array {
+  const bytes = ascii(text);
+  return concat([u16(bytes.length), bytes]);
+}
+
+function trdwBody(
+  disasterCode = 0x0001,
+  code: [number, number, number] = [0x47, 0x40, 0x0f],
+  description = 'Location 47400',
+): Uint8Array {
+  return concat([
+    u16(disasterCode),
+    Uint8Array.from([0x01]), // severity: Awas
+    Uint8Array.from([0x01]), // package id
+    Uint8Array.from([0x01]), // one location
+    Uint8Array.from(code), // postal code in BCD (0xF padding)
+    lengthPrefixed(description),
+  ]);
+}
+
+function tcdwBody(
+  disasters: Array<{ disasterCode: number; name: string }> = [
+    { disasterCode: 0x0001, name: 'Earth Quake' },
+  ],
+): Uint8Array {
+  const parts: Uint8Array[] = [Uint8Array.from([disasters.length])];
+  for (const entry of disasters) {
+    parts.push(
+      Uint8Array.from([0x01]), // package id
+      Uint8Array.from([0x01]), // authority: BMKG
+      u16(entry.disasterCode),
+      lengthPrefixed(entry.name),
+      lengthPrefixed('Display Location here 47400'),
+      lengthPrefixed('Today'),
+      lengthPrefixed('Strong shaking'),
+    );
+  }
+  return concat(parts);
+}
+
+function tmdwBody(): Uint8Array {
+  return concat([
+    Uint8Array.from([0x01]), // severity: Awas
+    Uint8Array.from([0x01]), // package id
+    lengthPrefixed16('StreamSpark Indonesia EWS Test - This is 01 Message'),
+  ]);
+}
+
+describe('Indonesian EWS (TRDW/TCDW/TMDW)', () => {
+  it('parses the three EWS private tables', () => {
+    const trdw = parseEwsSection(buildSection(0x80, trdwBody(), { tableIdExtension: 0x01 }));
+    expect(trdw?.kind).toBe('TRDW');
+    expect(trdw?.regions).toEqual([
+      {
+        disasterCode: 1,
+        locationTypeCode: 1,
+        packageId: 1,
+        locations: [{ code: '47400', description: 'Location 47400' }],
+      },
+    ]);
+
+    const tcdw = parseEwsSection(buildSection(0x80, tcdwBody(), { tableIdExtension: 0x02 }));
+    expect(tcdw?.kind).toBe('TCDW');
+    expect(tcdw?.disasters[0]).toMatchObject({
+      authority: 1,
+      disasterCode: 1,
+      name: 'Earth Quake',
+      position: 'Display Location here 47400',
+    });
+
+    const tmdw = parseEwsSection(buildSection(0x80, tmdwBody(), { tableIdExtension: 0x03 }));
+    expect(tmdw?.kind).toBe('TMDW');
+    expect(tmdw?.messages).toEqual([
+      {
+        locationTypeCode: 1,
+        packageId: 1,
+        message: 'StreamSpark Indonesia EWS Test - This is 01 Message',
+      },
+    ]);
+  });
+
+  it('rejects an EWS section with an invalid CRC', () => {
+    const section = buildSection(0x80, trdwBody(), { tableIdExtension: 0x01 });
+    const corrupted = Uint8Array.from(section);
+    corrupted[corrupted.length - 1] = (corrupted[corrupted.length - 1] as number) ^ 0xff;
+    expect(parseEwsSection(corrupted)).toBeNull();
+  });
+
+  it('reports EWS tables from a user-private stream in the probe result', () => {
+    const pat = buildSection(0x00, patBody([{ programNumber: 1000, pid: 0x038f }]), {
+      tableIdExtension: 1,
+    });
+    const pmt = buildSection(0x02, pmtBody(0x0080, [{ streamType: 0x80, pid: 0x0080 }]), {
+      tableIdExtension: 1000,
+    });
+    const pcrAt = (seconds: number) =>
+      buildPacket(0x0100, new Uint8Array(0), { pcrTicks: seconds * 27_000_000 });
+
+    const result = probeBuffer(
+      concat([
+        ...packetizeSection(0x0000, pat, 0),
+        ...packetizeSection(0x038f, pmt, 0),
+        pcrAt(0),
+        pcrAt(1), // stream time t=1 s
+        ...packetizeSection(0x0080, buildSection(0x80, trdwBody(), { tableIdExtension: 0x01 }), 0),
+        ...packetizeSection(0x0080, buildSection(0x80, tcdwBody(), { tableIdExtension: 0x02 }), 1),
+        ...packetizeSection(0x0080, buildSection(0x80, tmdwBody(), { tableIdExtension: 0x03 }), 2),
+        pcrAt(4), // stream time t=4 s
+        ...packetizeSection(
+          0x0080,
+          buildSection(0x80, trdwBody(0x0002, [0x10, 0x00, 0x1f], 'Tsunami area 10001'), {
+            tableIdExtension: 0x01,
+          }),
+          3,
+        ),
+        ...packetizeSection(
+          0x0080,
+          buildSection(
+            0x80,
+            tcdwBody([
+              { disasterCode: 0x0001, name: 'Earth Quake' },
+              { disasterCode: 0x0002, name: 'Tsunami' },
+            ]),
+            { tableIdExtension: 0x02, version: 1 },
+          ),
+          4,
+        ),
+        pcrAt(5), // stream time t=5 s, sample ends here
+      ]),
+      { name: 'ews.ts', kind: 'buffer' },
+    );
+
+    expect(result.emergency?.ews?.pid).toBe(0x0080);
+    // The summary keeps the newest TRDW revision (the tsunami region).
+    expect(result.emergency?.ews?.regions).toHaveLength(1);
+    expect(result.emergency?.ews?.regions[0]?.disasterCode).toBe(0x0002);
+    expect(result.emergency?.ews?.disasters.map((entry) => entry.name)).toEqual([
+      'Earth Quake',
+      'Tsunami',
+    ]);
+    expect(result.emergency?.ews?.messages[0]?.message).toBe(
+      'StreamSpark Indonesia EWS Test - This is 01 Message',
+    );
+    expect(result.pids.find((pid) => pid.pid === 0x0080)?.kind).toBe('EWS');
+    expect(
+      result.tables.find((table) => table.pid === 0x0080 && table.tableId === 0x80)?.name,
+    ).toBe('EWS TRDW (disaster region)');
+    expect(result.diagnostics.some((item) => item.code === 'EWS_ACTIVE')).toBe(true);
+
+    // Each region occurrence becomes a stream-time segment: the first one ends
+    // when it stops repeating, the second is still present at the sample end.
+    const ewsTimeline =
+      result.emergency?.timeline?.filter((segment) => segment.kind === 'EWS') ?? [];
+    expect(ewsTimeline).toEqual([
+      {
+        kind: 'EWS',
+        startSec: 1,
+        endSec: 1,
+        level: 1,
+        title: 'Earth Quake',
+        areas: '47400 Location 47400',
+        detail: 'StreamSpark Indonesia EWS Test - This is 01 Message',
+        pid: 0x0080,
+      },
+      {
+        kind: 'EWS',
+        startSec: 4,
+        level: 1,
+        title: 'Tsunami',
+        areas: '10001 Tsunami area 10001',
+        detail: 'StreamSpark Indonesia EWS Test - This is 01 Message',
+        pid: 0x0080,
+      },
+    ]);
   });
 });

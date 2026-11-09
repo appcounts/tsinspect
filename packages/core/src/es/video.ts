@@ -281,7 +281,6 @@ function parseH264Sps(data: Uint8Array): EsMetadata | undefined {
     }
   }
 
-  const subWidth = chromaFormat === 3 ? 1 : 2;
   const cropUnitX = chromaFormat === 1 ? 2 : 1;
   const cropUnitY = (chromaFormat === 1 ? 2 : 1) * (2 - (frameMbsOnly ? 1 : 0));
   const width = widthMbs * 16 - cropLeft * cropUnitX - cropRight * cropUnitX;

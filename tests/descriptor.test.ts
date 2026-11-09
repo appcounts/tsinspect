@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
 import { decodeDvbString, describeDescriptor, iso6937G2 } from '@tsinspect/core';
+import { describe, expect, it } from 'vitest';
 
-function rawDescriptor(tag: number, body: number[]): {
+function rawDescriptor(
+  tag: number,
+  body: number[],
+): {
   tag: number;
   length: number;
   data: Uint8Array;
@@ -31,10 +34,14 @@ describe('descriptors', () => {
     const textBytes = new TextEncoder().encode('ISDB detail');
     const body = [
       0x00, // descriptor number 0, last 0
-      0x6a, 0x70, 0x6e, // "jpn"
+      0x6a,
+      0x70,
+      0x6e, // "jpn"
       0x00, // no items
       textBytes.length + 3,
-      0x1b, 0x28, 0x4a, // designate G0 as ARIB alphanumeric
+      0x1b,
+      0x28,
+      0x4a, // designate G0 as ARIB alphanumeric
       ...textBytes,
     ];
     const extended = describeDescriptor(rawDescriptor(0xc4, body), 'arib');
@@ -66,32 +73,35 @@ describe('descriptors', () => {
 
   it('decodes ATSC content advisory dimensions and values', () => {
     const advisory = describeDescriptor(
-      rawDescriptor(0x87, [0x05, 0x02, 0x00, 0x30, 0x01, 0x20]),
+      rawDescriptor(0x87, [0xc1, 0x05, 0x02, 0x00, 0xf3, 0x01, 0xf2, 0x00]),
     );
     expect(advisory.fields?.ratingRegion).toBe(5);
+    expect(advisory.fields?.regionCount).toBe(1);
     expect(advisory.fields?.dimensions).toBe(2);
-    expect(advisory.fields?.ratings).toBe('0/3, 1/2');
+    expect(advisory.fields?.ratings).toBe('5/0/3, 5/1/2');
   });
 
   it('decodes ISO 639 audio types and accessibility flags', () => {
     const descriptor = describeDescriptor(
       rawDescriptor(0x0a, [
-        0x65, 0x6e, 0x67, 0x02, // eng, hearing impaired
-        0x66, 0x72, 0x61, 0x03, // fra, visual impaired commentary
+        0x65,
+        0x6e,
+        0x67,
+        0x02, // eng, hearing impaired
+        0x66,
+        0x72,
+        0x61,
+        0x03, // fra, visual impaired commentary
       ]),
     );
     expect(descriptor.fields?.languages).toBe('eng, fra');
-    expect(descriptor.fields?.audioTypes).toBe(
-      'hearing impaired, visual impaired commentary',
-    );
+    expect(descriptor.fields?.audioTypes).toBe('hearing impaired, visual impaired commentary');
     expect(descriptor.fields?.audioDescription).toBe(true);
     expect(descriptor.fields?.hearingImpaired).toBe(true);
   });
 
   it('decodes the supplementary audio descriptor', () => {
-    const descriptor = describeDescriptor(
-      rawDescriptor(0x7f, [0x06, 0x85, 0x66, 0x72, 0x61]),
-    );
+    const descriptor = describeDescriptor(rawDescriptor(0x7f, [0x06, 0x85, 0x66, 0x72, 0x61]));
     expect(descriptor.name).toBe('Supplementary audio');
     expect(descriptor.fields?.mixType).toBe('independent');
     expect(descriptor.fields?.editorialClassification).toBe(1);
@@ -99,17 +109,13 @@ describe('descriptors', () => {
     expect(descriptor.fields?.audioDescription).toBe(true);
     expect(descriptor.fields?.language).toBe('fra');
 
-    const hearing = describeDescriptor(
-      rawDescriptor(0x7f, [0x06, 0x8b, 0x65, 0x6e, 0x67]),
-    );
+    const hearing = describeDescriptor(rawDescriptor(0x7f, [0x06, 0x8b, 0x65, 0x6e, 0x67]));
     expect(hearing.fields?.editorialClassificationName).toBe(
       'clean audio for the hearing impaired',
     );
     expect(hearing.fields?.hearingImpaired).toBe(true);
 
-    const spoken = describeDescriptor(
-      rawDescriptor(0x7f, [0x06, 0x8f, 0x65, 0x6e, 0x67]),
-    );
+    const spoken = describeDescriptor(rawDescriptor(0x7f, [0x06, 0x8f, 0x65, 0x6e, 0x67]));
     expect(spoken.fields?.editorialClassificationName).toBe('spoken subtitles');
     expect(spoken.fields?.spokenSubtitles).toBe(true);
   });
@@ -120,29 +126,24 @@ describe('descriptors', () => {
     );
     expect(subtitling.fields?.hearingImpaired).toBe(true);
     expect(subtitling.fields?.pages).toBe('fra type=17 page=1/1');
-    expect(subtitling.fields?.subtitleTypes).toBe(
-      'fra DVB subtitles (hearing impaired)',
-    );
+    expect(subtitling.fields?.subtitleTypes).toBe('fra DVB subtitles (hearing impaired)');
     expect(subtitling.fields?.languages).toBe('fra');
 
-    const teletext = describeDescriptor(
-      rawDescriptor(0x56, [0x65, 0x6e, 0x67, 0x2b, 0x88]),
-    );
+    const teletext = describeDescriptor(rawDescriptor(0x56, [0x65, 0x6e, 0x67, 0x2b, 0x88]));
     expect(teletext.fields?.hearingImpaired).toBe(true);
     expect(teletext.fields?.pages).toBe('eng type=5 3:88');
-    expect(teletext.fields?.teletextTypes).toBe(
-      'eng hearing impaired subtitle page',
-    );
+    expect(teletext.fields?.teletextTypes).toBe('eng hearing impaired subtitle page');
   });
 
   it('decodes ATSC caption service types and flags', () => {
     const descriptor = describeDescriptor(
-      rawDescriptor(0x86, [
-        0xe3,
-        0x65, 0x6e, 0x67, 0x7e, 0x3f, 0xff,
-        0x65, 0x6e, 0x67, 0x7f, 0xff, 0xff,
-        0x65, 0x6e, 0x67, 0xc1, 0xff, 0xff,
-      ]),
+      rawDescriptor(
+        0x86,
+        [
+          0xe3, 0x65, 0x6e, 0x67, 0x7e, 0x3f, 0xff, 0x65, 0x6e, 0x67, 0x7f, 0xff, 0xff, 0x65, 0x6e,
+          0x67, 0xc1, 0xff, 0xff,
+        ],
+      ),
     );
     expect(descriptor.fields?.languages).toBe('eng');
     expect(descriptor.fields?.services).toBe(

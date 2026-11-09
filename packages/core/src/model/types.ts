@@ -248,6 +248,8 @@ export interface ProbePid {
   pcrCount: number;
   lastCc?: number;
   kind?: string;
+  /** Audio service type signalled in the PMT, e.g. "visually impaired". */
+  audioServiceType?: string;
   /** PID carries ISDB IIP packets. */
   iip?: boolean;
   /** Index of the first packet on this PID in the analysed source. */
@@ -378,7 +380,11 @@ export interface ProbeDsmccCarousel {
   /** Modules announced by DII messages. */
   modules: Array<{ id: number; size: number; version?: number }>;
   /** Files and directories decoded from BIOP messages. */
-  objects: Array<{ name: string; kind: 'file' | 'directory' | 'service-gateway' | 'unknown'; size?: number }>;
+  objects: Array<{
+    name: string;
+    kind: 'file' | 'directory' | 'service-gateway' | 'unknown';
+    size?: number;
+  }>;
   /** Service gateway object kinds seen in DSI messages. */
   gateways: string[];
 }
@@ -430,6 +436,10 @@ export interface ProbeEasAlert {
   descriptors: DescriptorInfo[];
   /** Number of times the same alert was repeated in the sample. */
   occurrences: number;
+  /** Stream time (PCR seconds) when the alert was first observed. */
+  firstSeenSec?: number;
+  /** Stream time (PCR seconds) when the alert was last observed. */
+  lastSeenSec?: number;
 }
 
 /** ISDB EWBS state carried by the emergency information descriptor (0xFC). */
@@ -439,6 +449,71 @@ export interface ProbeEwbsService {
   /** 0 = first-level (EWBS) signal, 1 = second-level signal. */
   signalLevel: number;
   areaCodes: number[];
+  /** Stream time (PCR seconds) when the service was first observed started. */
+  firstSeenSec?: number;
+  /** Stream time (PCR seconds) when the service was last observed started. */
+  lastSeenSec?: number;
+}
+
+/** Indonesian EWS region of disaster warning (TRDW) entry. */
+export interface ProbeEwsRegion {
+  disasterCode: number;
+  /** 0x01 = Awas (caution), 0x02 = Siaga (stand-by), 0x03 = Waspada (alert). */
+  locationTypeCode: number;
+  packageId: number;
+  locations: Array<{ code: string; description: string }>;
+}
+
+/** Indonesian EWS disaster code (TCDW) entry. */
+export interface ProbeEwsDisaster {
+  packageId: number;
+  /** 0x01 = BMKG, 0x02 = BNPB. */
+  authority: number;
+  disasterCode: number;
+  name: string;
+  position: string;
+  date: string;
+  characteristic: string;
+}
+
+/** Indonesian EWS disaster message (TMDW) entry. */
+export interface ProbeEwsMessage {
+  locationTypeCode: number;
+  packageId: number;
+  message: string;
+}
+
+/** Indonesian Early Warning System private tables (Permen Kominfo 3/2014). */
+export interface ProbeEws {
+  /** PID carrying the EWS private sections. */
+  pid: number;
+  regions: ProbeEwsRegion[];
+  disasters: ProbeEwsDisaster[];
+  messages: ProbeEwsMessage[];
+}
+
+/** One time segment of an emergency warning, in stream (PCR) time. */
+export interface ProbeEmergencySegment {
+  kind: 'EAS' | 'EWS' | 'EWBS';
+  /** Segment start in stream time (seconds from the first PCR in the sample). */
+  startSec: number;
+  /** Segment end; omitted when the warning is still active at the sample end. */
+  endSec?: number;
+  /**
+   * Severity within the system: EAS priority (0 highest), EWBS signal level
+   * (0 = first level, 1 = second level) or EWS location_type_code (1 = Awas,
+   * 2 = Siaga, 3 = Waspada).
+   */
+  level?: number;
+  /** Alert, disaster or service title. */
+  title?: string;
+  /** Affected areas (postal codes, area codes or EAS locations). */
+  areas?: string;
+  /** Additional detail, such as the EWS information message. */
+  detail?: string;
+  pid?: number;
+  /** EWBS service_id the warning belongs to, for per-program grouping. */
+  serviceId?: number;
 }
 
 /** Emergency alerting summary for the analysed stream. */
@@ -453,6 +528,10 @@ export interface ProbeEmergency {
     services: ProbeEwbsService[];
     tmccIdentifiers?: number[];
   };
+  /** Indonesian Early Warning System carried as private tables. */
+  ews?: ProbeEws;
+  /** Time-segmented view of every emergency warning in the sample. */
+  timeline?: ProbeEmergencySegment[];
 }
 
 export interface Diagnostic {

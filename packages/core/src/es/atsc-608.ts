@@ -479,6 +479,16 @@ export class Atsc608Decoder {
     state.pen = { color, italics, underline };
   }
 
+  /** One snapshot per channel, so CC1–CC4 can be reported separately. */
+  snapshots(): Atsc608Snapshot[] {
+    return this.channels.map((state, index) => ({
+      channel: (index + 1) as 1 | 2 | 3 | 4,
+      mode: state.mode,
+      rows: cloneRows(state.displayed),
+      text: screenText(state.displayed),
+    }));
+  }
+
   snapshot(): Atsc608Snapshot | undefined {
     let best: { channel: 1 | 2 | 3 | 4; state: ChannelState; text: string } | undefined;
     for (let index = 0; index < this.channels.length; index += 1) {

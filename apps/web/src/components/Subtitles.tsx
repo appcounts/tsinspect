@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react';
 import type {
   Atsc608PreviewFrame,
   Atsc708PreviewFrame,
@@ -12,18 +11,14 @@ import type {
   TextPreviewFrame,
   TextPreviewGlyph,
 } from '@tsinspect/core';
-import { useT, type UiKey } from '../i18n';
-import { formatCueTime } from '../format';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { formatCueTime } from '../format';
+import { type UiKey, useT } from '../i18n';
 import { AccessibilityCell, DataTable } from './shared';
 import { TeletextBrowser } from './TeletextBrowser';
 
-const SUBTITLE_CATEGORY_ORDER: SubtitleCategory[] = [
-  'teletext',
-  'subtitle',
-  'caption',
-  'vbi',
-];
+const SUBTITLE_CATEGORY_ORDER: SubtitleCategory[] = ['teletext', 'subtitle', 'caption', 'vbi'];
 
 const SUBTITLE_CATEGORY_LABEL: Record<SubtitleCategory, UiKey> = {
   teletext: 'subtitles.category.teletext',
@@ -92,8 +87,7 @@ export function Subtitles({
   const streamMatchesQuery = (stream: SubtitleStreamReport): boolean =>
     `${stream.pidHex} ${stream.format} ${stream.formatName}`.toLowerCase().includes(q) ||
     stream.cues.some(
-      (cue) =>
-        cue.text.toLowerCase().includes(q) || (cue.label ?? '').toLowerCase().includes(q),
+      (cue) => cue.text.toLowerCase().includes(q) || (cue.label ?? '').toLowerCase().includes(q),
     );
 
   const visibleServices = report.services.filter((service) => {
@@ -101,13 +95,11 @@ export function Subtitles({
     if (streams.length === 0) return false;
     if (!q) return true;
     const serviceMatches =
-      (service.name ?? '').toLowerCase().includes(q) ||
-      String(service.programNumber).includes(q);
+      (service.name ?? '').toLowerCase().includes(q) || String(service.programNumber).includes(q);
     return serviceMatches || streams.some(streamMatchesQuery);
   });
   const service =
-    visibleServices.find((entry) => entry.programNumber === selectedProgram) ??
-    visibleServices[0];
+    visibleServices.find((entry) => entry.programNumber === selectedProgram) ?? visibleServices[0];
   const streams = service
     ? service.streams
         .filter(categoryMatches)
@@ -115,8 +107,7 @@ export function Subtitles({
           if (!q) return stream;
           const cues = stream.cues.filter(
             (cue) =>
-              cue.text.toLowerCase().includes(q) ||
-              (cue.label ?? '').toLowerCase().includes(q),
+              cue.text.toLowerCase().includes(q) || (cue.label ?? '').toLowerCase().includes(q),
           );
           const metadata = `${stream.pidHex} ${stream.format} ${stream.formatName}`
             .toLowerCase()
@@ -127,8 +118,9 @@ export function Subtitles({
         })
         .filter((stream): stream is SubtitleStreamReport => stream !== undefined)
     : [];
-  const groups = SUBTITLE_CATEGORY_ORDER
-    .filter((target) => category === 'all' || target === category)
+  const groups = SUBTITLE_CATEGORY_ORDER.filter(
+    (target) => category === 'all' || target === category,
+  )
     .map((target) => ({
       category: target,
       streams: streams.filter((stream) => stream.category === target),
@@ -161,9 +153,7 @@ export function Subtitles({
             </button>
           );
         })}
-        <span className="muted small subtitle-filter-hint">
-          {t('subtitles.filter.hint')}
-        </span>
+        <span className="muted small subtitle-filter-hint">{t('subtitles.filter.hint')}</span>
       </div>
 
       <div className="subtitles-grid">
@@ -183,8 +173,7 @@ export function Subtitles({
                 const count = entry.streams.reduce((sum, stream) => sum + stream.cueCount, 0);
                 const bitmapFrames = entry.streams.reduce(
                   (sum, stream) =>
-                    sum +
-                    (stream.preview?.kind === 'bitmap' ? stream.preview.frames.length : 0),
+                    sum + (stream.preview?.kind === 'bitmap' ? stream.preview.frames.length : 0),
                   0,
                 );
                 const breakdown = SUBTITLE_CATEGORY_ORDER.map((target) => ({
@@ -192,10 +181,7 @@ export function Subtitles({
                   count: entry.streams.filter((stream) => stream.category === target).length,
                 }))
                   .filter((item) => item.count > 0)
-                  .map(
-                    (item) =>
-                      `${t(SUBTITLE_CATEGORY_SHORT[item.target])} ${item.count}`,
-                  )
+                  .map((item) => `${t(SUBTITLE_CATEGORY_SHORT[item.target])} ${item.count}`)
                   .join(' · ');
                 return (
                   <button
@@ -250,7 +236,7 @@ export function Subtitles({
                 <div className="subtitle-group-cards">
                   {group.streams.map((stream) => (
                     <SubtitleStreamCard
-                      key={`${stream.pid}:${stream.format}:${stream.mode ?? ''}`}
+                      key={`${stream.pid}:${stream.format}:${stream.mode ?? ''}:${stream.channel ?? ''}:${stream.service ?? ''}`}
                       stream={stream}
                       result={result}
                       sessionId={sessionId}
@@ -308,11 +294,7 @@ function parseHexColor(value: string): [number, number, number] {
     const r = clean.charAt(0);
     const g = clean.charAt(1);
     const b = clean.charAt(2);
-    return [
-      Number.parseInt(r + r, 16),
-      Number.parseInt(g + g, 16),
-      Number.parseInt(b + b, 16),
-    ];
+    return [Number.parseInt(r + r, 16), Number.parseInt(g + g, 16), Number.parseInt(b + b, 16)];
   }
   return [
     Number.parseInt(clean.slice(0, 2), 16) || 0,
@@ -339,6 +321,7 @@ function SubtitlePreviewPlayer({
   const end = last?.end ?? start + 5;
   const [time, setTime] = useState(start);
   const [playing, setPlaying] = useState(false);
+  const [rate, setRate] = useState(1);
   const [bitmap, setBitmap] = useState<BitmapFrameResponse['frame']>(null);
 
   useEffect(() => {
@@ -351,16 +334,20 @@ function SubtitlePreviewPlayer({
     if (!playing) return;
     const id = window.setInterval(() => {
       setTime((previous) => {
-        const next = previous + 0.1;
+        const next = previous + 0.1 * rate;
         return next >= end ? start : next;
       });
     }, 100);
     return () => window.clearInterval(id);
-  }, [playing, start, end]);
+  }, [playing, start, end, rate]);
 
   const frame =
     frames.find((entry) => time >= entry.start && time < entry.end) ??
     (time >= end ? last : undefined);
+
+  // ARIB FLC flashing blinks at 1 Hz while playing. Keep the paused frame
+  // fully visible so scrubbing does not land on a hidden phase.
+  const flashHidden = playing && Math.floor(time / 0.5) % 2 === 1;
 
   useEffect(() => {
     if (preview.kind !== 'bitmap' || !sessionId) {
@@ -474,26 +461,28 @@ function SubtitlePreviewPlayer({
       const fontFamily =
         '"Segoe UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", system-ui, sans-serif';
       const fontMetrics = preview.metrics;
-      const planeWidth = fontMetrics?.planeWidth ?? canvas.width;
-      const planeHeight = fontMetrics?.planeHeight ?? canvas.height;
+      const display = textFrame?.display;
+      const planeWidth = display?.planeWidth ?? fontMetrics?.planeWidth ?? canvas.width;
+      const planeHeight = display?.planeHeight ?? fontMetrics?.planeHeight ?? canvas.height;
       const scaleX = canvas.width / planeWidth;
       const scaleY = canvas.height / planeHeight;
-      const baseFont = fontMetrics
-        ? fontMetrics.fontHeight * scaleY
+      const hasFontMetrics = display?.fontHeight !== undefined || fontMetrics !== undefined;
+      const glyphWidth = (display?.fontWidth ?? fontMetrics?.fontWidth ?? 36) * scaleX;
+      const glyphHeight = (display?.fontHeight ?? fontMetrics?.fontHeight ?? 36) * scaleY;
+      const gapX = (display?.horizontalSpacing ?? fontMetrics?.horizontalSpacing ?? 4) * scaleX;
+      const gapY = (display?.verticalSpacing ?? fontMetrics?.verticalSpacing ?? 24) * scaleY;
+      const baseFont = hasFontMetrics
+        ? glyphHeight
         : Math.max(12, Math.round(canvas.height * 0.05));
-      const cellWidth = fontMetrics ? fontMetrics.charWidth * scaleX : baseFont;
-      const cellHeight = fontMetrics ? fontMetrics.charHeight * scaleY : baseFont * 1.25;
+      const cellWidth = hasFontMetrics ? glyphWidth + gapX : baseFont;
+      const cellHeight = hasFontMetrics ? glyphHeight + gapY : baseFont * 1.25;
+      const vertical = display?.vertical === true;
 
-      const display = textFrame?.display;
       const metricsDisplay = fontMetrics?.display;
       const displayX =
-        display?.x !== undefined
-          ? display.x * scaleX
-          : (metricsDisplay?.x ?? 0) * scaleX;
+        display?.x !== undefined ? display.x * scaleX : (metricsDisplay?.x ?? 0) * scaleX;
       const displayY =
-        display?.y !== undefined
-          ? display.y * scaleY
-          : (metricsDisplay?.y ?? 0) * scaleY;
+        display?.y !== undefined ? display.y * scaleY : (metricsDisplay?.y ?? 0) * scaleY;
       const displayWidth =
         display?.width !== undefined
           ? display.width * scaleX
@@ -533,26 +522,6 @@ function SubtitlePreviewPlayer({
         return offscreen;
       };
 
-      type RunSegment = { text: string } | { glyph: TextPreviewGlyph };
-      const segmentsOf = (text: string): RunSegment[] => {
-        const result: RunSegment[] = [];
-        let buffer = '';
-        for (const char of text) {
-          const glyph = glyphMap.get(char);
-          if (glyph) {
-            if (buffer) {
-              result.push({ text: buffer });
-              buffer = '';
-            }
-            result.push({ glyph });
-          } else {
-            buffer += char;
-          }
-        }
-        if (buffer) result.push({ text: buffer });
-        return result;
-      };
-
       const runFont = (run: TextPreviewFrame['styledLines'][number]['runs'][number]): string => {
         const fontSize = baseFont * (run.style.heightScale ?? 1);
         const weight = run.style.bold ? '700' : '600';
@@ -560,25 +529,141 @@ function SubtitlePreviewPlayer({
         return `${italic}${weight} ${fontSize}px ${fontFamily}`;
       };
 
-      const measureSegment = (
-        segment: RunSegment,
-        run: TextPreviewFrame['styledLines'][number]['runs'][number],
-      ): number => {
-        const fontSize = baseFont * (run.style.heightScale ?? 1);
-        if ('text' in segment) {
-          context.font = runFont(run);
-          return context.measureText(segment.text).width;
-        }
-        return fontSize * (segment.glyph.width / segment.glyph.height);
-      };
+      type PreviewLine = TextPreviewFrame['styledLines'][number];
+      type PreviewRun = PreviewLine['runs'][number];
+      const renderLines: PreviewLine[] =
+        styledLines.length > 0
+          ? styledLines
+          : (textFrame?.lines ?? []).map((text) => ({ runs: [{ text, style: {} }] }));
 
-      const measureRun = (run: TextPreviewFrame['styledLines'][number]['runs'][number]): number => {
-        const natural = segmentsOf(run.text).reduce(
-          (sum, segment) => sum + measureSegment(segment, run),
-          0,
-        );
-        return natural * (run.style.widthScale ?? 1);
-      };
+      if (vertical && renderLines.length > 0) {
+        const columnPitch = glyphWidth + gapY;
+        const charPitch = glyphHeight + gapX;
+        const areaRight = displayX + displayWidth;
+        const areaTop = displayY;
+
+        const drawVerticalChar = (
+          char: string,
+          centerX: number,
+          centerY: number,
+          run: PreviewRun,
+        ): void => {
+          if (run.style.conceal) return;
+          if (flashHidden && run.style.flash) return;
+          const color = run.style.color ?? '#ffffff';
+          const ornamentColor = run.style.ornamentColor ?? 'rgba(0, 0, 0, 0.85)';
+          const ornament = run.style.ornament ?? 'none';
+          const glyph = glyphMap.get(char);
+          // Vertical writing flows top-to-bottom, but glyphs stay upright so
+          // the characters remain readable.
+          context.save();
+          context.translate(centerX, centerY);
+          context.scale(run.style.widthScale ?? 1, 1);
+          if (glyph) {
+            const drawGlyph = (tint: string, dx: number, dy: number): void => {
+              context.drawImage(
+                glyphImage(glyph, tint),
+                -glyphWidth / 2 + dx,
+                -glyphHeight / 2 + dy,
+                glyphWidth,
+                glyphHeight,
+              );
+            };
+            if (ornament === 'outline') {
+              // Keep the border at least 2 device pixels: the preview canvas is
+              // downscaled in the page, where a 1px outline disappears.
+              const edge = Math.max(2, glyphWidth * 0.08);
+              for (const [dx, dy] of [
+                [-edge, 0],
+                [edge, 0],
+                [0, -edge],
+                [0, edge],
+                [-edge, -edge],
+                [edge, -edge],
+                [-edge, edge],
+                [edge, edge],
+              ] as const) {
+                drawGlyph(ornamentColor, dx, dy);
+              }
+            } else if (ornament === 'shadow') {
+              drawGlyph(ornamentColor, glyphWidth * 0.08, glyphHeight * 0.1);
+            }
+            drawGlyph(color, 0, 0);
+          } else {
+            context.font = runFont(run);
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.lineJoin = 'round';
+            if (ornament === 'outline') {
+              const edge = Math.max(2, baseFont * 0.1);
+              context.fillStyle = ornamentColor;
+              for (const [dx, dy] of [
+                [-edge, 0],
+                [edge, 0],
+                [0, -edge],
+                [0, edge],
+                [-edge, -edge],
+                [edge, -edge],
+                [-edge, edge],
+                [edge, edge],
+              ] as const) {
+                context.fillText(char, dx, dy);
+              }
+            } else if (ornament === 'shadow') {
+              context.fillStyle = ornamentColor;
+              context.fillText(char, baseFont * 0.08, baseFont * 0.1);
+            }
+            if (ornament === 'hollow') {
+              context.lineWidth = Math.max(1.5, baseFont * 0.09);
+              context.strokeStyle = color;
+              context.strokeText(char, 0, 0);
+            } else {
+              context.fillStyle = color;
+              context.fillText(char, 0, 0);
+            }
+          }
+          context.restore();
+        };
+
+        renderLines.forEach((line, index) => {
+          // APS row selects the column; vertical columns run right to left.
+          const columnIndex = line.row ?? index;
+          const columnLeft =
+            line.x !== undefined
+              ? line.x * scaleX
+              : areaRight - glyphWidth - columnIndex * columnPitch;
+          const centerX = columnLeft + glyphWidth / 2;
+          let cursorY =
+            line.y !== undefined ? line.y * scaleY : areaTop + (line.column ?? 0) * charPitch;
+
+          for (const run of line.runs) {
+            for (const char of run.text) {
+              if (char === ' ' || char === '\t') {
+                cursorY += charPitch;
+                continue;
+              }
+              if (run.style.background) {
+                context.fillStyle = run.style.background;
+                // Fill the full column cell so neighbouring columns tile.
+                context.fillRect(columnLeft - gapY, cursorY, columnPitch, charPitch);
+              }
+              drawVerticalChar(char, centerX, cursorY + glyphHeight / 2, run);
+              if (run.style.underline && !(flashHidden && run.style.flash)) {
+                const thickness = Math.max(2, glyphHeight * 0.08);
+                context.fillStyle = run.style.color ?? '#ffffff';
+                context.fillRect(
+                  columnLeft + glyphWidth - thickness,
+                  cursorY,
+                  thickness,
+                  charPitch,
+                );
+              }
+              cursorY += charPitch;
+            }
+          }
+        });
+        return;
+      }
 
       if (styledLines.length === 0) {
         const lines = textFrame?.lines ?? [];
@@ -604,11 +689,18 @@ function SubtitlePreviewPlayer({
           baseFont,
           ...line.runs.map((run) => baseFont * (run.style.heightScale ?? 1)),
         );
+        // ARIB places every character in a fixed cell, so a line's width is
+        // the character count times the cell pitch, not the summed glyph
+        // widths of the proportional font.
+        const width = line.runs.reduce(
+          (sum, run) => sum + [...run.text].length * cellWidth * (run.style.widthScale ?? 1),
+          0,
+        );
         return {
           line,
           fontSize,
           height: Math.max(cellHeight, fontSize * 1.25),
-          width: line.runs.reduce((sum, run) => sum + measureRun(run), 0),
+          width,
         };
       });
 
@@ -640,68 +732,52 @@ function SubtitlePreviewPlayer({
         for (const run of line.runs) {
           const runSize = baseFont * (run.style.heightScale ?? 1);
           const widthScale = run.style.widthScale ?? 1;
-          const font = runFont(run);
-          const segments = segmentsOf(run.text);
-          const naturalWidth = segments.reduce(
-            (sum, segment) => sum + measureSegment(segment, run),
-            0,
-          );
-          const advance = naturalWidth * widthScale;
+          const advance = [...run.text].length * cellWidth * widthScale;
+          const runStart = x;
           const color = run.style.color ?? '#ffffff';
           const ornamentColor = run.style.ornamentColor ?? 'rgba(0, 0, 0, 0.85)';
           const ornament = run.style.ornament ?? 'none';
+          const flashOff = flashHidden && run.style.flash === true;
 
           if (run.style.background) {
             context.fillStyle = run.style.background;
-            context.fillRect(x, baseline - runSize, advance, runSize * 1.12);
+            // The raster background covers the whole character cell (including
+            // the spacing) so adjacent rows tile without gaps and the underline
+            // stays inside the coloured band.
+            context.fillRect(x, baseline - glyphHeight, advance, height);
           }
 
           if (!run.style.conceal) {
-            for (const segment of segments) {
-              const segmentWidth = measureSegment(segment, run);
+            for (const char of run.text) {
+              const glyph = glyphMap.get(char);
+              const cellCenter = x + (cellWidth * widthScale) / 2;
               context.save();
-              context.translate(x, baseline);
+              // Flashing runs blink by drawing transparent during the off phase.
+              if (flashOff) context.globalAlpha = 0;
+              context.translate(cellCenter, baseline);
               context.scale(widthScale, 1);
-              if ('text' in segment) {
-                context.font = font;
-                context.textAlign = 'left';
-                context.textBaseline = 'alphabetic';
-                context.lineJoin = 'round';
-                if (ornament === 'outline') {
-                  context.lineWidth = Math.max(1.5, runSize * 0.12);
-                  context.strokeStyle = ornamentColor;
-                  context.strokeText(segment.text, 0, 0);
-                } else if (ornament === 'shadow') {
-                  context.fillStyle = ornamentColor;
-                  context.fillText(segment.text, runSize * 0.08, runSize * 0.1);
-                }
-                if (ornament === 'hollow') {
-                  context.lineWidth = Math.max(1.5, runSize * 0.09);
-                  context.strokeStyle = color;
-                  context.strokeText(segment.text, 0, 0);
-                } else {
-                  context.fillStyle = color;
-                  context.fillText(segment.text, 0, 0);
-                }
-              } else {
-                const glyph = segment.glyph;
+              if (glyph) {
                 const glyphWidth = runSize * (glyph.width / glyph.height);
                 const drawGlyph = (tint: string, offsetX: number, offsetY: number): void => {
                   context.drawImage(
                     glyphImage(glyph, tint),
-                    offsetX,
+                    -glyphWidth / 2 + offsetX,
                     -runSize + offsetY,
                     glyphWidth,
                     runSize,
                   );
                 };
                 if (ornament === 'outline') {
-                  const edge = Math.max(1, runSize * 0.06);
+                  const edge = Math.max(2, runSize * 0.08);
                   for (const [dx, dy] of [
                     [-edge, 0],
                     [edge, 0],
                     [0, -edge],
                     [0, edge],
+                    [-edge, -edge],
+                    [edge, -edge],
+                    [-edge, edge],
+                    [edge, edge],
                   ] as const) {
                     drawGlyph(ornamentColor, dx, dy);
                   }
@@ -709,18 +785,50 @@ function SubtitlePreviewPlayer({
                   drawGlyph(ornamentColor, runSize * 0.08, runSize * 0.1);
                 }
                 drawGlyph(color, 0, 0);
+              } else {
+                context.font = runFont(run);
+                context.textAlign = 'center';
+                context.textBaseline = 'alphabetic';
+                context.lineJoin = 'round';
+                if (ornament === 'outline') {
+                  const edge = Math.max(2, runSize * 0.1);
+                  context.fillStyle = ornamentColor;
+                  for (const [dx, dy] of [
+                    [-edge, 0],
+                    [edge, 0],
+                    [0, -edge],
+                    [0, edge],
+                    [-edge, -edge],
+                    [edge, -edge],
+                    [-edge, edge],
+                    [edge, edge],
+                  ] as const) {
+                    context.fillText(char, dx, dy);
+                  }
+                } else if (ornament === 'shadow') {
+                  context.fillStyle = ornamentColor;
+                  context.fillText(char, runSize * 0.08, runSize * 0.1);
+                }
+                if (ornament === 'hollow') {
+                  context.lineWidth = Math.max(1.5, runSize * 0.09);
+                  context.strokeStyle = color;
+                  context.strokeText(char, 0, 0);
+                } else {
+                  context.fillStyle = color;
+                  context.fillText(char, 0, 0);
+                }
               }
               context.restore();
-              x += segmentWidth * widthScale;
+              x += cellWidth * widthScale;
             }
 
-            if (run.style.underline) {
+            if (run.style.underline && !flashOff) {
               context.fillStyle = color;
               context.fillRect(
-                x - advance,
+                runStart,
                 baseline + runSize * 0.12,
                 advance,
-                Math.max(1, runSize * 0.06),
+                Math.max(2, runSize * 0.08),
               );
             }
           } else {
@@ -785,12 +893,7 @@ function SubtitlePreviewPlayer({
     context.save();
     if (bitmap.window) {
       context.beginPath();
-      context.rect(
-        bitmap.window.x,
-        bitmap.window.y,
-        bitmap.window.width,
-        bitmap.window.height,
-      );
+      context.rect(bitmap.window.x, bitmap.window.y, bitmap.window.width, bitmap.window.height);
       context.clip();
     }
     for (const region of bitmap.regions) {
@@ -808,7 +911,7 @@ function SubtitlePreviewPlayer({
       context.putImageData(image, region.x, region.y);
     }
     context.restore();
-  }, [frame, preview, bitmap]);
+  }, [frame, preview, bitmap, flashHidden]);
 
   if (frames.length === 0) return null;
 
@@ -835,14 +938,28 @@ function SubtitlePreviewPlayer({
         <canvas ref={canvasRef} width={preview.width} height={preview.height} />
       </div>
       {preview.kind === 'text' ? (
-        <p className="muted small subtitle-preview-note">
-          {t('subtitles.preview.textOnly')}
-        </p>
+        <p className="muted small subtitle-preview-note">{t('subtitles.preview.textOnly')}</p>
       ) : null}
       <div className="subtitle-preview-controls">
         <button className="ghost tiny" onClick={() => setPlaying((value) => !value)}>
           {playing ? t('subtitles.preview.pause') : t('subtitles.preview.play')}
         </button>
+        <span
+          className="subtitle-preview-rates"
+          role="group"
+          aria-label={t('subtitles.preview.rate')}
+        >
+          {[1, 2, 4].map((value) => (
+            <button
+              key={value}
+              className={`ghost tiny ${rate === value ? 'active' : ''}`}
+              aria-pressed={rate === value}
+              onClick={() => setRate(value)}
+            >
+              {value}x
+            </button>
+          ))}
+        </span>
         <input
           type="range"
           min={start}
@@ -898,36 +1015,25 @@ function SubtitleStreamCard({
             {stream.truncated ? ` · ${t('subtitles.truncated')}` : ''}
           </p>
         </div>
-        <AccessibilityCell
-          descriptors={source?.descriptors ?? []}
-          kind={source?.es?.kind}
-        />
+        <AccessibilityCell descriptors={source?.descriptors ?? []} kind={source?.es?.kind} />
       </div>
 
       <div className="subtitle-meta">
         {stream.mode ? (
           <span className="cap-badge">{t('subtitles.mode', { value: stream.mode })}</span>
         ) : null}
-        {stream.channel ? (
-          <span className="cap-badge">CC{stream.channel}</span>
-        ) : null}
-        {stream.service ? (
-          <span className="cap-badge">Service {stream.service}</span>
-        ) : null}
+        {stream.channel ? <span className="cap-badge">CC{stream.channel}</span> : null}
+        {stream.service ? <span className="cap-badge">Service {stream.service}</span> : null}
         {stream.segmentCount !== undefined ? (
           <span className="cap-badge">
             {t('subtitles.segments', { count: stream.segmentCount })}
           </span>
         ) : null}
         {pageIds && pageIds.length > 0 ? (
-          <span className="cap-badge">
-            {t('subtitles.pages', { value: pageIds.join(', ') })}
-          </span>
+          <span className="cap-badge">{t('subtitles.pages', { value: pageIds.join(', ') })}</span>
         ) : null}
         {stream.unitCount !== undefined ? (
-          <span className="cap-badge">
-            {t('subtitles.units', { count: stream.unitCount })}
-          </span>
+          <span className="cap-badge">{t('subtitles.units', { count: stream.unitCount })}</span>
         ) : null}
         {stream.dtvccBytes !== undefined ? (
           <span className="cap-badge">
@@ -955,9 +1061,7 @@ function SubtitleStreamCard({
           <DataTable<SubtitleCue>
             storageKey={`subtitles-${stream.pid}-${stream.format}`}
             rows={stream.cues}
-            rowKey={(cue) =>
-              `${cue.start}:${cue.end}:${cue.label ?? ''}:${cue.text}`
-            }
+            rowKey={(cue) => `${cue.start}:${cue.end}:${cue.label ?? ''}:${cue.text}`}
             initialSort={{ key: 'start', dir: 'asc' }}
             columns={[
               {

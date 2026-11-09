@@ -1,8 +1,5 @@
+import { type PesPacket, renderDvbSubtitleFrame } from '@tsinspect/core';
 import { describe, expect, it } from 'vitest';
-import {
-  renderDvbSubtitleFrame,
-  type PesPacket,
-} from '@tsinspect/core';
 
 function segment(type: number, pageId: number, body: number[]): number[] {
   return [
@@ -83,11 +80,7 @@ function buildPayload(
   const pageId = 1;
   const segments: number[] = [];
 
-  const dds: number[] = [
-    window ? 0x08 : 0x00,
-    ...u16(1919),
-    ...u16(1079),
-  ];
+  const dds: number[] = [window ? 0x08 : 0x00, ...u16(1919), ...u16(1079)];
   if (window) {
     dds.push(
       ...u16(window.x),
@@ -98,14 +91,7 @@ function buildPayload(
   }
   segments.push(...segment(0x14, pageId, dds));
 
-  const pcs = [
-    0,
-    0x00,
-    0,
-    0,
-    ...u16(0),
-    ...u16(0),
-  ];
+  const pcs = [0, 0x00, 0, 0, ...u16(0), ...u16(0)];
   segments.push(...segment(0x10, pageId, pcs));
 
   const rcs = [
@@ -149,6 +135,53 @@ function pes(payload: Uint8Array): PesPacket {
 }
 
 describe('DVB bitmap renderer depth and display window', () => {
+  it('decodes 4-bit RLE runs of colour 0 instead of ending the line', () => {
+    const pageId = 1;
+    // 0000 11 00 -> one colour-0 pixel, 0000 11 01 -> two colour-0 pixels,
+    // then codes 3, 4, 5, 6, then 0000 0 000 -> end of string.
+    const field = [0x11, 0x0c, 0x0d, 0x34, 0x56, 0x00, 0xf0];
+    const segments: number[] = [];
+    segments.push(...segment(0x14, pageId, [0x00, 0x07, 0x7f, 0x04, 0x37]));
+    segments.push(...segment(0x10, pageId, [0, 0x00, 0, 0, ...u16(0), ...u16(0)]));
+    segments.push(
+      ...segment(0x11, pageId, [
+        0,
+        0x00,
+        ...u16(7),
+        ...u16(2),
+        0x10,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        ...u16(0),
+      ]),
+    );
+    segments.push(...segment(0x12, pageId, clut(4)));
+    segments.push(
+      ...segment(0x13, pageId, [
+        0x00,
+        0x01,
+        0x00,
+        (field.length >> 8) & 0xff,
+        field.length & 0xff,
+        0x00,
+        0x00,
+        ...field,
+      ]),
+    );
+    segments.push(...segment(0x80, pageId, []));
+    const payload = Uint8Array.from([0x20, 0x00, ...segments]);
+    const frame = renderDvbSubtitleFrame([pes(payload)], 1);
+    expect([...(frame?.regions[0]?.pixels ?? [])]).toEqual([
+      0, 0, 0, 3, 4, 5, 6, 0, 0, 0, 3, 4, 5, 6,
+    ]);
+  });
+
   it('renders 2-bit pixels inside a display window', () => {
     const window = { x: 100, y: 50, width: 640, height: 480 };
     const frame = renderDvbSubtitleFrame([pes(buildPayload(2, window))], 1);

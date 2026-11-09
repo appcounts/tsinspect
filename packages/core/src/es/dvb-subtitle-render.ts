@@ -8,7 +8,7 @@
  */
 
 import type { PesPacket } from '../pes/assembler.js';
-import { indexDvbSubtitlePes, type DvbSubtitleSegment } from './dvb-subtitle.js';
+import { type DvbSubtitleSegment, indexDvbSubtitlePes } from './dvb-subtitle.js';
 
 export interface DvbBitmapRegion {
   x: number;
@@ -95,7 +95,7 @@ function readU16(data: Uint8Array, offset: number): number {
 
 function readU32(data: Uint8Array, offset: number): number {
   return (
-    ((data[offset] ?? 0) * 0x1000000) +
+    (data[offset] ?? 0) * 0x1000000 +
     ((data[offset + 1] ?? 0) << 16) +
     ((data[offset + 2] ?? 0) << 8) +
     (data[offset + 3] ?? 0)
@@ -117,7 +117,7 @@ function emptyClut(): ClutFamily {
   return Array.from({ length: 256 }, () => [0, 0, 0, 0] as Rgba);
 }
 
-function parseClut(body: Uint8Array): ClutSet {
+export function parseClut(body: Uint8Array): ClutSet {
   const set: ClutSet = {
     entries2: emptyClut(),
     entries4: emptyClut(),
@@ -151,6 +151,8 @@ function parseClut(body: Uint8Array): ClutSet {
       const cb = Math.round((cb4 * 255) / 15);
       rgba = y === 0 ? [0, 0, 0, 0] : ycbcrToRgba(y, cr, cb, 255 - Math.round((t2 * 255) / 3));
     }
+    // One flag per table: 0x80 = 2-bit, 0x40 = 4-bit, 0x20 = 8-bit;
+    // bit0 is the full-range colour flag.
     if (flags & 0x80) set.entries2[entryId] = rgba;
     if (flags & 0x40) set.entries4[entryId] = rgba;
     if (flags & 0x20) set.entries8[entryId] = rgba;
@@ -177,7 +179,6 @@ function parsePageComposition(body: Uint8Array): {
 
 function parseRegionComposition(body: Uint8Array): RegionDefinition | null {
   if (body.length < 10) return null;
-  const regionId = body[0] as number;
   const versionFill = body[1] as number;
   const width = readU16(body, 2);
   const height = readU16(body, 4);
@@ -258,20 +259,22 @@ function decode2(reader: BitReader, out: number[], map2to4?: number[], map2to8?:
       continue;
     }
     reader.read(2);
-    const switch1 = reader.read(1);
-    if (switch1 === 1) {
+    // switch1 = 0: run of pixels with the following 2-bit code.
+    if (reader.read(1) === 0) {
       const run = reader.read(3) + 3;
       const code = mapCode(reader.read(2), map2to8 ?? map2to4);
       for (let i = 0; i < run; i += 1) out.push(code);
       continue;
     }
-    const switch2 = reader.read(1);
-    if (switch2 === 1) {
+    // switch1 = 1, switch2 = 1: a single colour-0 pixel.
+    if (reader.read(1) === 1) {
       out.push(0);
       continue;
     }
     const switch3 = reader.read(2);
-    if (switch3 === 0b10) {
+    if (switch3 === 0b01) {
+      out.push(0, 0);
+    } else if (switch3 === 0b10) {
       const run = reader.read(4) + 12;
       const code = mapCode(reader.read(2), map2to8 ?? map2to4);
       for (let i = 0; i < run; i += 1) out.push(code);
@@ -279,8 +282,6 @@ function decode2(reader: BitReader, out: number[], map2to4?: number[], map2to8?:
       const run = reader.read(8) + 29;
       const code = mapCode(reader.read(2), map2to8 ?? map2to4);
       for (let i = 0; i < run; i += 1) out.push(code);
-    } else if (switch3 === 0b01) {
-      out.push(0, 0);
     } else {
       return;
     }
@@ -313,16 +314,18 @@ function decode4(reader: BitReader, out: number[], map4to8?: number[]): void {
       continue;
     }
     const switch3 = reader.read(2);
-    if (switch3 === 0b10) {
+    if (switch3 === 0b00) {
+      out.push(0); // one colour-0 pixel
+    } else if (switch3 === 0b01) {
+      out.push(0, 0); // two colour-0 pixels
+    } else if (switch3 === 0b10) {
       const length = reader.read(4) + 9;
       const code = mapCode(reader.read(4), map4to8);
       for (let i = 0; i < length; i += 1) out.push(code);
-    } else if (switch3 === 0b11) {
+    } else {
       const length = reader.read(8) + 25;
       const code = mapCode(reader.read(4), map4to8);
       for (let i = 0; i < length; i += 1) out.push(code);
-    } else {
-      return;
     }
   }
 }
@@ -385,12 +388,7 @@ function decodeField(data: Uint8Array): { lines: number[][]; depth: number } {
     if (type === 0x20 && reader.remaining >= 16) {
       const first = reader.read(8);
       const second = reader.read(8);
-      map2to4 = [
-        (first >> 4) & 0x0f,
-        first & 0x0f,
-        (second >> 4) & 0x0f,
-        second & 0x0f,
-      ];
+      map2to4 = [(first >> 4) & 0x0f, first & 0x0f, (second >> 4) & 0x0f, second & 0x0f];
       continue;
     }
     if (type === 0x21 && reader.remaining >= 32) {
@@ -408,11 +406,12 @@ function decodeField(data: Uint8Array): { lines: number[][]; depth: number } {
   return { lines, depth: depth || 2 };
 }
 
-function parseObject(body: Uint8Array): { objectId: number; pixels: ObjectPixels } | null {
+export function parseObject(body: Uint8Array): { objectId: number; pixels: ObjectPixels } | null {
   if (body.length < 7) return null;
   const objectId = readU16(body, 0);
   const coding = body[2] as number;
-  if (((coding >> 6) & 0x03) !== 0) return null;
+  // object_version_number(4) | coding_method(2) | non_modifying_colour_flag(1) | reserved(1)
+  if (((coding >> 2) & 0x03) !== 0) return null;
   const topLength = readU16(body, 3);
   const bottomLength = readU16(body, 5);
   const topStart = 7;
@@ -577,13 +576,11 @@ function splitDisplaySets(segments: DvbSubtitleSegment[]): DvbSubtitleSegment[][
 
 /**
  * Collect visible display-set times without decoding pixel data.
- * State 0 display sets with at least one region are visible; state 2 and empty
- * page compositions end the previous frame.
+ * Every page state (0 normal, 1 acquisition point, 2 mode change) shows the
+ * page it composes; an empty page composition clears the previous frame.
  */
 export function collectDvbSubtitleTimeline(packets: PesPacket[]): DvbSubtitleTimeline {
-  const ordered = [...packets].sort(
-    (a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0),
-  );
+  const ordered = [...packets].sort((a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0));
   let width = 0;
   let height = 0;
   const entries: Array<{ start: number; visible: boolean }> = [];
@@ -609,12 +606,10 @@ export function collectDvbSubtitleTimeline(packets: PesPacket[]): DvbSubtitleTim
         }
       }
       if (pageState === undefined) continue;
-      if (pageState === 0 || pageState === 2) {
-        entries.push({
-          start: pes.ptsSeconds ?? 0,
-          visible: pageRegions > 0,
-        });
-      }
+      entries.push({
+        start: pes.ptsSeconds ?? 0,
+        visible: pageRegions > 0,
+      });
     }
   }
   entries.sort((a, b) => a.start - b.start);
@@ -642,9 +637,7 @@ export function renderDvbSubtitleFrame(
   packets: PesPacket[],
   timeSec: number,
 ): DvbBitmapFrame | null {
-  const ordered = [...packets].sort(
-    (a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0),
-  );
+  const ordered = [...packets].sort((a, b) => (a.ptsSeconds ?? 0) - (b.ptsSeconds ?? 0));
   const cluts = new Map<number, ClutSet>();
   const regions = new Map<number, RegionDefinition>();
   const objects = new Map<number, ObjectPixels>();
@@ -655,7 +648,10 @@ export function renderDvbSubtitleFrame(
 
   for (const pes of ordered) {
     const time = pes.ptsSeconds ?? 0;
-    if (time > timeSec) break;
+    // Frame start times are sent with millisecond precision, so a request can
+    // land a fraction of a millisecond before the display set PTS. Treat that
+    // as inclusive or the first frame of a cue renders empty.
+    if (time > timeSec + 0.002) break;
     const index = indexDvbSubtitlePes(pes.payload);
     if (!index) continue;
     for (const set of splitDisplaySets(index.segments)) {
@@ -666,35 +662,31 @@ export function renderDvbSubtitleFrame(
       if (display.height !== undefined) displayHeight = display.height;
       if (display.window !== undefined) displayWindow = display.window;
       if (display.pageState === undefined) continue;
-      if (display.pageState === 0 || display.pageState === 2) {
-        const pageRegions = display.pageRegions ?? [];
-        if (pageRegions.length === 0) {
-          current = null;
-          continue;
-        }
-        const width = displayWidth || 720;
-        const height = displayHeight || 576;
-        const window: DvbDisplayWindow =
-          displayWindow ?? { x: 0, y: 0, width, height };
-        const composed: DvbBitmapRegion[] = [];
-        for (const page of pageRegions) {
-          const definition = regions.get(page.regionId);
-          if (!definition) continue;
-          const region = buildRegion(
-            definition,
-            {
-              regionId: page.regionId,
-              x: window.x + page.x,
-              y: window.y + page.y,
-            },
-            objects,
-            cluts,
-          );
-          if (region) composed.push(region);
-        }
-        current =
-          composed.length > 0 ? { width, height, window, regions: composed } : null;
+      const pageRegions = display.pageRegions ?? [];
+      if (pageRegions.length === 0) {
+        current = null;
+        continue;
       }
+      const width = displayWidth || 720;
+      const height = displayHeight || 576;
+      const window: DvbDisplayWindow = displayWindow ?? { x: 0, y: 0, width, height };
+      const composed: DvbBitmapRegion[] = [];
+      for (const page of pageRegions) {
+        const definition = regions.get(page.regionId);
+        if (!definition) continue;
+        const region = buildRegion(
+          definition,
+          {
+            regionId: page.regionId,
+            x: window.x + page.x,
+            y: window.y + page.y,
+          },
+          objects,
+          cluts,
+        );
+        if (region) composed.push(region);
+      }
+      current = composed.length > 0 ? { width, height, window, regions: composed } : null;
     }
   }
   return current;

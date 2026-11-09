@@ -127,6 +127,14 @@ async function analyzeSource(
 
 const app = Fastify({ logger: false, bodyLimit: 1024 * 1024 });
 
+// UI actions like the file picker POST without a body, so the request carries
+// no Content-Type. Fastify rejects those with 415; treat unknown/empty bodies
+// as an empty JSON object. JSON requests still use the default parser.
+app.addContentTypeParser('*', { parseAs: 'string' }, (_request, body, done) => {
+  const text = String(body).trim();
+  done(null, text ? text : {});
+});
+
 // A request that names a session pins it so idle/budget eviction cannot pull
 // the data out from under the handler. The pin is released on response or
 // client abort.

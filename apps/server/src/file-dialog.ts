@@ -14,6 +14,9 @@ import { existsSync, statSync } from 'node:fs';
 // owner stays on screen (transparent, 1x1) so the dialog is still centered
 // normally instead of being placed off-screen.
 const PICK_SCRIPT = [
+  // The child stdout is decoded as UTF-8; without this the console writes the
+  // path in the ANSI codepage and non-ASCII characters get corrupted.
+  '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
   'Add-Type -AssemblyName System.Windows.Forms',
   'Add-Type -AssemblyName System.Drawing',
   '$owner = New-Object System.Windows.Forms.Form',
