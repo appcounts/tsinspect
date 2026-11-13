@@ -481,7 +481,9 @@ export default function App() {
                   />
                 </section>
               )}
-              {tab === 'data' && <DataBroadcastView data={result.dataBroadcast} />}
+              {tab === 'data' && (
+                <DataBroadcastView data={result.dataBroadcast} sessionId={sessionId} />
+              )}
               {tab === 'epg' && <Epg result={result} query={query} />}
               {tab === 'subtitles' && (
                 <Subtitles

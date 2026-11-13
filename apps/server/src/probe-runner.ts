@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import sea from 'node:sea';
 import { Worker } from 'node:worker_threads';
+import { inflateSync } from 'node:zlib';
 import {
   probeBuffer,
   type ProbeOptions,
@@ -112,6 +113,7 @@ function probeInThread(
 ): ProbeJob {
   const result = probeBuffer(data, {
     ...options,
+    inflate: (payload) => new Uint8Array(inflateSync(payload)),
     onProgress: (progress) => hooks.onProgress?.({ ...progress, cancelable: false }),
   });
   return { result, data, cancelable: false };

@@ -527,7 +527,12 @@ interface EitEventSpec {
   runningStatus?: number;
 }
 
-function eitSection(tableId: number, serviceId: number, events: EitEventSpec[]): Uint8Array {
+function eitSection(
+  tableId: number,
+  serviceId: number,
+  events: EitEventSpec[],
+  sectionNumber?: number,
+): Uint8Array {
   const entries = events.map((event) => {
     const desc = event.name !== undefined ? shortEvent(event.name, event.text) : new Uint8Array(0);
     const body = new Uint8Array(12 + desc.length);
@@ -543,7 +548,10 @@ function eitSection(tableId: number, serviceId: number, events: EitEventSpec[]):
   return buildSection(
     tableId,
     concat([Uint8Array.from([0x12, 0x34, 0x20, 0x00, 0x00, 0x4e]), ...entries]),
-    { tableIdExtension: serviceId },
+    {
+      tableIdExtension: serviceId,
+      ...(sectionNumber !== undefined ? { sectionNumber, lastSectionNumber: 1 } : {}),
+    },
   );
 }
 
@@ -594,6 +602,22 @@ describe('EIT present/following and schedule merging', () => {
     expect(event?.runningStatusName).toBe('running');
     expect(event?.name).toBe('Live');
     expect(event?.sources).toEqual(['present-following', 'schedule']);
+  });
+
+  it('marks the section-1 event of a present/following table as following', () => {
+    const data = eitStream([
+      eitSection(0x4e, 0x0401, [{ eventId: 10, name: 'Now', runningStatus: 4 }], 0),
+      eitSection(0x4e, 0x0401, [{ eventId: 11, name: 'Next', runningStatus: 2 }], 1),
+    ]);
+    const result = probeBuffer(data, { name: 'eit.ts', kind: 'buffer', size: data.length });
+    expect(
+      result.events.find((item) => item.serviceId === 0x0401 && item.eventId === 10)
+        ?.presentFollowing,
+    ).toBe('present');
+    expect(
+      result.events.find((item) => item.serviceId === 0x0401 && item.eventId === 11)
+        ?.presentFollowing,
+    ).toBe('following');
   });
 
   it('moves an event from following to present', () => {

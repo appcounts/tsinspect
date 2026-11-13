@@ -1,6 +1,7 @@
 import type {
   DescriptorInfo,
   EsMetadata,
+  ProbeDataBroadcast,
   ProbeEvent,
   ProbePid,
   ProbeRatingRegion,
@@ -203,6 +204,11 @@ export function formatProbeText(result: ProbeResult, options: TextFormatOptions 
     lines.push('');
     lines.push(sectionTitle(`EPG (${result.events.length} event(s))`));
     lines.push(...formatEvents(result.events));
+  }
+
+  if (result.dataBroadcast) {
+    lines.push('');
+    lines.push(...formatDataBroadcast(result.dataBroadcast, all));
   }
 
   lines.push('');
@@ -575,6 +581,63 @@ function serviceTypeName(type: number): string {
     default:
       return 'unknown';
   }
+}
+
+function formatDataBroadcast(data: ProbeDataBroadcast, all: boolean): string[] {
+  const lines: string[] = [];
+  const totals = [
+    data.mpe.length > 0
+      ? `${data.mpe.length} MPE session(s), ${data.mpe.reduce((sum, item) => sum + item.datagrams, 0)} datagram(s)`
+      : '',
+    data.mpeFec.length > 0 ? `${data.mpeFec.length} MPE-FEC PID(s)` : '',
+    data.carousels.length > 0
+      ? `${data.carousels.length} object carousel(s), ${data.carousels.reduce((sum, item) => sum + item.entries.length, 0)} object(s)`
+      : '',
+    data.applications.length > 0 ? `${data.applications.length} application(s)` : '',
+  ].filter((part) => part.length > 0);
+  lines.push(sectionTitle('DATA BROADCAST'));
+  lines.push(`  ${totals.length > 0 ? totals.join('; ') : 'None.'}`);
+  if (data.mhp || data.hbbtv) {
+    lines.push(
+      `  Signalling: ${data.mhp ? 'MHP' : ''}${data.mhp && data.hbbtv ? ' / ' : ''}${data.hbbtv ? 'HbbTV' : ''}`,
+    );
+  }
+
+  for (const carousel of data.carousels) {
+    lines.push('');
+    lines.push(
+      `  PID ${hex16(carousel.pid)}  DSI ${carousel.serverInitiates}  DII ${carousel.downloadInfos}  DDB ${carousel.dataBlocks}  modules ${carousel.modules.length}`,
+    );
+    const status = [
+      `root ${carousel.root ?? '(unresolved)'}`,
+      `complete modules ${carousel.completeModules}`,
+      carousel.pendingModules > 0 ? `pending ${carousel.pendingModules}` : '',
+      carousel.compressedModules > 0 ? `compressed ${carousel.compressedModules}` : '',
+      carousel.danglingBindings > 0 ? `dangling ${carousel.danglingBindings}` : '',
+      carousel.truncated ? 'truncated' : '',
+    ].filter((part) => part.length > 0);
+    lines.push(`    ${status.join('  ')}`);
+    if (carousel.entries.length === 0) {
+      lines.push('    No objects recovered from the sampled module data.');
+    }
+    const limit = all ? carousel.entries.length : 24;
+    for (const entry of carousel.entries.slice(0, limit)) {
+      const depth = entry.path === '/' ? 0 : entry.path.split('/').length - 1;
+      const name = entry.path === '/' ? '/' : (entry.path.split('/').pop() ?? entry.path);
+      const marker = entry.kind === 'directory' ? '+' : entry.kind === 'stream' ? '*' : '-';
+      const details: string[] = [];
+      if (entry.size !== undefined) details.push(`${entry.size} B`);
+      if (entry.contentType !== undefined) details.push(entry.contentType);
+      if (!entry.complete && entry.kind === 'file') details.push('incomplete');
+      lines.push(
+        `    ${'  '.repeat(depth)}${marker} ${name}${details.length > 0 ? `  (${details.join(', ')})` : ''}`,
+      );
+    }
+    if (limit < carousel.entries.length) {
+      lines.push(`    ... ${carousel.entries.length - limit} more object(s) (use --all)`);
+    }
+  }
+  return lines;
 }
 
 function packetFormatName(format: ProbeResult['packet']['format']): string {

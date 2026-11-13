@@ -26,6 +26,7 @@
     "probe:isdb": "tsx apps/cli/src/index.ts probe .cache/streams/isdb-nhk.head.ts",
     "probe:dvb": "tsx apps/cli/src/index.ts probe .cache/streams/dvb-france-uhf33.head.ts",
     "probe:brazil": "tsx apps/cli/src/index.ts probe .cache/streams/isdb-tb-204.head.ts",
+    "carousel:mhp": "tsx apps/cli/src/index.ts carousel .cache/streams/hotbird-mhp.head.ts",
     "compare:tsduck": "node tools/compare-tsduck.mjs atsc-473 isdb-nhk dvb-france-uhf33 isdb-tb-204",
     "bench": "tsx tools/benchmark.ts",
     "fixtures": "node tools/fetch-streams/fetch.mjs --head 16 atsc-473 isdb-nhk dvb-france-uhf33",

@@ -1,11 +1,38 @@
-import type { ProbeDataBroadcast } from '@tsinspect/core';
+import type { ProbeCarouselEntry, ProbeDataBroadcast } from '@tsinspect/core';
 import { useT } from '../i18n';
 
 function rec(value: number | undefined, fallback = 0): number {
   return value ?? fallback;
 }
 
-export function DataBroadcastView({ data }: { data: ProbeDataBroadcast | undefined }) {
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KiB', 'MiB', 'GiB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+}
+
+function entryName(entry: ProbeCarouselEntry): string {
+  if (entry.path === '/') return '/';
+  return entry.path.split('/').pop() ?? entry.path;
+}
+
+function entryDepth(entry: ProbeCarouselEntry): number {
+  return entry.path === '/' ? 0 : entry.path.split('/').length - 1;
+}
+
+export function DataBroadcastView({
+  data,
+  sessionId,
+}: {
+  data: ProbeDataBroadcast | undefined;
+  sessionId?: string;
+}) {
   const t = useT();
   if (!data) {
     return (
@@ -40,7 +67,8 @@ export function DataBroadcastView({ data }: { data: ProbeDataBroadcast | undefin
           <span>{t('data.carousels')}</span>
           <strong>{data.carousels.length}</strong>
           <small>
-            {t('data.blocks', { count: totals.blocks })} · {t('data.modules', { count: totals.modules })}
+            {t('data.blocks', { count: totals.blocks })} ·{' '}
+            {t('data.modules', { count: totals.modules })}
           </small>
         </div>
         <div className="metric">
@@ -152,10 +180,22 @@ export function DataBroadcastView({ data }: { data: ProbeDataBroadcast | undefin
                 <span className="mono">PID 0x{carousel.pid.toString(16).padStart(4, '0')}</span>
                 <span className="muted small">
                   DSI {carousel.serverInitiates} · DII {carousel.downloadInfos} · DDB{' '}
-                  {rec(carousel.dataBlocks)} · {t('data.modulesShort', { count: carousel.modules.length })} ·{' '}
-                  {t('data.objectsShort', { count: carousel.objects.length })}
+                  {rec(carousel.dataBlocks)} ·{' '}
+                  {t('data.modulesShort', { count: carousel.modules.length })} ·{' '}
+                  {t('data.objectsShort', { count: carousel.entries.length })}
                 </span>
               </div>
+              <p className="muted small">
+                {carousel.root ?? t('data.rootUnresolved')} ·{' '}
+                {t('data.carouselStatus', {
+                  complete: carousel.completeModules,
+                  pending: carousel.pendingModules,
+                })}
+                {carousel.danglingBindings > 0
+                  ? ` · ${t('data.dangling', { count: carousel.danglingBindings })}`
+                  : ''}
+                {carousel.truncated ? ' · truncated' : ''}
+              </p>
               {carousel.transactions.length > 0 ? (
                 <p className="muted small mono">
                   {t('data.transactions')}: {carousel.transactions.join(', ')}
@@ -183,17 +223,44 @@ export function DataBroadcastView({ data }: { data: ProbeDataBroadcast | undefin
                   </table>
                 </div>
               ) : null}
-              {carousel.objects.length > 0 ? (
-                <div className="object-list">
-                  {carousel.objects.map((object) => (
-                    <span className={`object-chip ${object.kind}`} key={`${object.kind}:${object.name}`}>
-                      {object.kind === 'directory' ? '▸ ' : object.kind === 'file' ? '· ' : ''}
-                      {object.name}
-                      {object.size !== undefined ? ` (${object.size})` : ''}
-                    </span>
+              {carousel.entries.length > 0 ? (
+                <div className="carousel-tree">
+                  {carousel.entries.map((entry) => (
+                    <div
+                      className="tree-row"
+                      key={`${carousel.pid}:${entry.path}`}
+                      style={{ paddingLeft: `${entryDepth(entry) * 14}px` }}
+                    >
+                      <span className={`tree-kind ${entry.kind}`}>
+                        {entry.kind === 'directory' ? '+' : entry.kind === 'stream' ? '*' : '-'}
+                      </span>
+                      <span className="mono tree-name">{entryName(entry)}</span>
+                      {entry.size !== undefined ? (
+                        <span className="muted small">{formatSize(entry.size)}</span>
+                      ) : null}
+                      {entry.contentType ? (
+                        <span className="muted small mono">{entry.contentType}</span>
+                      ) : null}
+                      {!entry.complete && entry.kind === 'file' ? (
+                        <span className="muted small">({t('data.incomplete')})</span>
+                      ) : null}
+                      {entry.kind === 'file' && entry.complete && sessionId ? (
+                        <a
+                          className="small"
+                          href={`/api/sessions/${sessionId}/carousel/file?path=${encodeURIComponent(
+                            entry.path,
+                          )}&pid=0x${carousel.pid.toString(16).padStart(4, '0')}`}
+                          download
+                        >
+                          {t('data.download')}
+                        </a>
+                      ) : null}
+                    </div>
                   ))}
                 </div>
-              ) : null}
+              ) : (
+                <p className="muted small">{t('data.noObjects')}</p>
+              )}
             </div>
           ))}
         </section>
@@ -224,7 +291,9 @@ export function DataBroadcastView({ data }: { data: ProbeDataBroadcast | undefin
               </thead>
               <tbody>
                 {data.applications.map((application) => (
-                  <tr key={`${application.pid}:${application.organizationId}:${application.applicationId}`}>
+                  <tr
+                    key={`${application.pid}:${application.organizationId}:${application.applicationId}`}
+                  >
                     <td className="mono">0x{application.pid.toString(16).padStart(4, '0')}</td>
                     <td>
                       {application.applicationTypeName}

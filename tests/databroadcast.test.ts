@@ -1,7 +1,11 @@
+import { type AitSection, DataBroadcastAccumulator, scanCarousels } from '@tsinspect/core';
 import { describe, expect, it } from 'vitest';
-import { DataBroadcastAccumulator, type AitSection } from '@tsinspect/core';
+import { inflateSync } from 'node:zlib';
+import { carouselFixture } from './carousel-fixture.js';
+import { concat, packetizeSection } from './helpers.js';
 
-function section(tableId: number, body: number[], header = 0xb0): Uint8Array {
+/** Section whose payload starts directly after table_id/section_length (MPE). */
+function rawSection(tableId: number, body: number[], header = 0xb0): Uint8Array {
   const sectionLength = body.length + 4;
   return Uint8Array.from([
     tableId,
@@ -15,90 +19,35 @@ function section(tableId: number, body: number[], header = 0xb0): Uint8Array {
   ]);
 }
 
-/** Long section header plus dsmccMessageHeader (ISO/IEC 13818-6, 7.2). */
-function dsmccHeader(messageId: number, transactionId: number, messageLength: number): number[] {
-  return [
-    0, 0, // table_id_extension
-    0x01, // version 0, current_next 1
-    0, 0, // section number, last section number
-    0x11, 0x03, // protocolDiscriminator, dsmccType
-    (messageId >> 8) & 0xff,
-    messageId & 0xff,
-    (transactionId >> 24) & 0xff,
-    (transactionId >> 16) & 0xff,
-    (transactionId >> 8) & 0xff,
-    transactionId & 0xff,
-    0, // reserved
-    0, // adaptationLength
-    (messageLength >> 8) & 0xff,
-    messageLength & 0xff,
-  ];
-}
-
 function mpeSection(): Uint8Array {
   const ipv4 = [
-    0x45, 0x00, 0x00, 0x14,
-    0x00, 0x00, 0x00, 0x00,
-    0x40, 0x11, 0x00, 0x00,
-    10, 0, 0, 1,
-    239, 1, 2, 3,
+    0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x11, 0x00, 0x00, 10, 0, 0, 1, 239, 1, 2,
+    3,
   ];
-  return section(0x3e, [
-    0, 0, 0, 0, 0, 1, // MAC
+  return rawSection(0x3e, [
+    0,
+    0,
+    0,
+    0,
+    0,
+    1, // MAC
     0x03, // LLC/SNAP flag + current_next_indicator
-    0, 0, // section number / last
-    0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00, // LLC/SNAP
+    0,
+    0, // section number / last
+    0xaa,
+    0xaa,
+    0x03,
+    0x00,
+    0x00,
+    0x00,
+    0x08,
+    0x00, // LLC/SNAP
     ...ipv4,
   ]);
 }
 
-function diiSection(): Uint8Array {
-  const body = [
-    0, 0, 0, 1, // downloadId
-    0x04, 0x00, // blockSize
-    1, 0, // windowSize, ackPeriod
-    0, 0, 0, 0, // tCDownloadWindow
-    0, 0, 0, 0, // tCDownloadScenario
-    0, 1, // numberOfModules
-    0x00, 0x10, // moduleId
-    0, 0, 0x03, 0xe8, // moduleSize 1000
-    1, 0, // version, moduleInfoLength
-  ];
-  return section(0x3b, [
-    ...dsmccHeader(0x1002, 1, body.length),
-    ...body,
-  ]);
-}
-
-function ddbSection(): Uint8Array {
-  const magic = [0x42, 0x49, 0x4f, 0x50]; // BIOP
-  const key = [...Buffer.from('logo.png')];
-  const messageSize = 11 + 3 + 1 + key.length + 4 + 0;
-  const message = [
-    ...magic,
-    1, 0, // version, reserved
-    (messageSize >> 24) & 0xff,
-    (messageSize >> 16) & 0xff,
-    (messageSize >> 8) & 0xff,
-    messageSize & 0xff,
-    3, 0x66, 0x69, 0x6c, // objectKind 'fil'
-    key.length,
-    ...key,
-    0, 0, 0, 0, // objectInfoLength
-  ];
-  const body = [
-    0x00, 0x10, // moduleId
-    1, // moduleVersion
-    0, // reserved
-    0, 0, // blockNumber
-    ...message,
-  ];
-  return section(0x3c, [...dsmccHeader(0x1003, 1, body.length), ...body]);
-}
-
 function fecSection(): Uint8Array {
-  const body = [4, 0, ...new Array<number>(190).fill(0)];
-  return section(0x78, body, 0x70);
+  return rawSection(0x78, [4, 0, ...new Array<number>(190).fill(0)], 0x70);
 }
 
 describe('data broadcast accumulator', () => {
@@ -121,17 +70,81 @@ describe('data broadcast accumulator', () => {
     expect(data?.mpeFec[0]?.frames).toBe(1);
   });
 
-  it('parses DSM-CC DII modules and DDB BIOP objects', () => {
+  it('rebuilds the object carousel directory tree', () => {
+    const fixture = carouselFixture();
     const accumulator = new DataBroadcastAccumulator();
-    accumulator.pushSection(0x0300, diiSection());
-    accumulator.pushSection(0x0300, ddbSection());
+    for (const section of fixture.sections) accumulator.pushSection(0x0300, section);
     const data = accumulator.finish();
     const carousel = data?.carousels[0];
-    expect(carousel?.downloadInfos).toBe(1);
-    expect(carousel?.dataBlocks).toBe(1);
-    expect(carousel?.modules).toEqual([{ id: 0x10, size: 1000, version: 1 }]);
-    expect(carousel?.objects[0]?.name).toBe('logo.png');
-    expect(carousel?.objects[0]?.kind).toBe('file');
+    expect(carousel?.root).toBe('/');
+    expect(carousel?.modules.map((module) => module.id)).toEqual([10, 11, 12, 13, 14]);
+    expect(carousel?.entries.map((entry) => [entry.path, entry.kind, entry.complete])).toEqual([
+      ['/', 'directory', true],
+      ['/index.html', 'file', true],
+      ['/css', 'directory', true],
+      ['/css/site.css', 'file', true],
+    ]);
+    expect(carousel?.entries[1]?.size).toBe(fixture.content.get('/index.html')?.length);
+    expect(carousel?.entries[1]?.contentType).toBe('text/html');
+    expect(carousel?.entries[1]?.moduleId).toBe(12);
+    expect(carousel?.completeModules).toBe(5);
+    expect(carousel?.pendingModules).toBe(0);
+    expect(carousel?.danglingBindings).toBe(0);
+    expect(carousel?.unreachableObjects).toBe(0);
+  });
+
+  it('exports file content with scanCarousels', () => {
+    const fixture = carouselFixture({ blockSize: 16 });
+    const packets = fixture.sections.flatMap((section, index) =>
+      packetizeSection(0x0300, section, index % 16),
+    );
+    const result = scanCarousels(concat(packets));
+    expect(result.carousels).toHaveLength(1);
+    const files = result.files.filter((file) => file.complete);
+    expect(files.map((file) => file.path).sort()).toEqual(['/css/site.css', '/index.html']);
+    for (const file of files) {
+      const expected = fixture.content.get(file.path);
+      expect(expected).toBeDefined();
+      expect(Array.from(file.data ?? [])).toEqual(Array.from(expected ?? []));
+    }
+  });
+
+  it('keeps announced entries when a module is missing', () => {
+    const fixture = carouselFixture({ omit: new Set([14]) });
+    const accumulator = new DataBroadcastAccumulator();
+    for (const section of fixture.sections) accumulator.pushSection(0x0300, section);
+    const carousel = accumulator.finish()?.carousels[0];
+    const css = carousel?.entries.find((entry) => entry.path === '/css/site.css');
+    expect(css?.complete).toBe(false);
+    expect(css?.size).toBe(fixture.content.get('/css/site.css')?.length);
+    expect(carousel?.danglingBindings).toBe(1);
+    expect(carousel?.pendingModules).toBe(0);
+  });
+
+  it('inflates modules flagged with the compressed_module_descriptor', () => {
+    const fixture = carouselFixture({ compress: new Set([12, 14]) });
+    const plain = new DataBroadcastAccumulator();
+    for (const section of fixture.sections) plain.pushSection(0x0300, section);
+    const compressed = plain.finish()?.carousels[0];
+    expect(compressed?.compressedModules).toBe(2);
+    expect(compressed?.pendingModules).toBe(2);
+    expect(compressed?.entries.find((entry) => entry.path === '/index.html')?.complete).toBe(false);
+
+    const inflating = new DataBroadcastAccumulator({
+      inflate: (payload) => new Uint8Array(inflateSync(payload)),
+    });
+    for (const section of fixture.sections) inflating.pushSection(0x0300, section);
+    const inflated = inflating.finish()?.carousels[0];
+    expect(inflated?.compressedModules).toBe(2);
+    expect(inflated?.pendingModules).toBe(0);
+    expect(
+      inflated?.entries
+        .filter((entry) => entry.kind === 'file')
+        .map((entry) => [entry.path, entry.complete]),
+    ).toEqual([
+      ['/index.html', true],
+      ['/css/site.css', true],
+    ]);
   });
 
   it('detects MHP and HbbTV applications from AIT', () => {
@@ -155,14 +168,18 @@ describe('data broadcast accumulator', () => {
               tagHex: '0x01',
               length: name.length + 1,
               name: 'application_name_descriptor',
-              raw: Buffer.from([name.length, ...name]).toString('hex').toUpperCase(),
+              raw: Buffer.from([name.length, ...name])
+                .toString('hex')
+                .toUpperCase(),
             },
             {
               tag: 0x02,
               tagHex: '0x02',
               length: url.length + 1,
               name: 'transport_protocol_descriptor',
-              raw: Buffer.from([url.length, ...url]).toString('hex').toUpperCase(),
+              raw: Buffer.from([url.length, ...url])
+                .toString('hex')
+                .toUpperCase(),
             },
           ],
         },

@@ -4,13 +4,38 @@ export {
   probeBuffer,
 } from './analyze/probe.js';
 export {
+  BIOP_MAGIC,
+  type BiopBinding,
+  type BiopIor,
+  type BiopKind,
+  type BiopMessage,
+  type BiopObjectLocation,
+  type BiopProfile,
+  type BiopTap,
+  parseBiopMessage,
+  parseIor,
+  TAG_BIOP,
+  TAG_CONN_BINDER,
+  TAG_LITE_OPTIONS,
+  TAG_OBJECT_LOCATION,
+  TAG_SERVICE_LOCATION,
+} from './data/biop.js';
+export {
+  type CarouselScanOptions,
+  type CarouselScanResult,
   DataBroadcastAccumulator,
   type DataSectionSummary,
   DSMCC_DDB_TABLE,
   DSMCC_DOWNLOAD_TABLE,
   MPE_DATAGRAM_TABLE,
   MPE_FEC_TABLE,
+  type ScannedCarouselFile,
+  scanCarousels,
 } from './data/databroadcast.js';
+export {
+  type CarouselOptions,
+  ObjectCarouselState,
+} from './data/object-carousel.js';
 export {
   type AribProfileEvidence,
   resolveAribProfile,
@@ -182,6 +207,7 @@ export type {
   PacketLayout,
   ProbeBroadcastApplication,
   ProbeCapabilities,
+  ProbeCarouselEntry,
   ProbeClock,
   ProbeDataBroadcast,
   ProbeDsmccCarousel,

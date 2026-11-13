@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { createServer as createNetServer } from 'node:net';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import sea from 'node:sea';
-import Fastify from 'fastify';
+import { inflateSync } from 'node:zlib';
 import {
+  type CarouselScanResult,
   collectPesPackets,
   collectScte35Timeline,
   collectSubtitleReport,
@@ -14,7 +15,9 @@ import {
   renderDvbSubtitleFrame,
   type Scte35Timeline,
   type SubtitleReport,
+  scanCarousels,
 } from '@tsinspect/core';
+import Fastify from 'fastify';
 import { abortError, isAbortError } from './abort.js';
 import { resolveSampleBytes } from './config.js';
 import { pickFile } from './file-dialog.js';
@@ -27,8 +30,8 @@ import {
   listSessions,
   releaseSession,
   type Session,
-  type TimelineData,
   type TimelineBucket,
+  type TimelineData,
   type TimelinePid,
   type TimelineSubtitleCue,
 } from './sessions.js';
@@ -192,7 +195,10 @@ function summary(session: Session): Record<string, unknown> {
   };
 }
 
-function sessionOr404(id: string, reply: { code: (status: number) => { send: (body: unknown) => unknown } }): Session | undefined {
+function sessionOr404(
+  id: string,
+  reply: { code: (status: number) => { send: (body: unknown) => unknown } },
+): Session | undefined {
   const session = getSession(id);
   if (!session) {
     reply.code(404).send({ error: 'session not found' });
@@ -243,6 +249,14 @@ function sessionSubtitles(session: Session): SubtitleReport | undefined {
   return session.subtitles;
 }
 
+function sessionCarousel(session: Session): CarouselScanResult | undefined {
+  if (session.carousel) return session.carousel;
+  session.carousel = scanCarousels(session.data, {
+    inflate: (payload) => new Uint8Array(inflateSync(payload)),
+  });
+  return session.carousel;
+}
+
 function buildTimeline(
   session: Session,
   buckets: number,
@@ -267,13 +281,8 @@ function buildTimeline(
     const offset = layout.firstPacketOffset + index * layout.packetSize;
     const base = offset + layout.syncOffset;
     if (session.data[base] !== 0x47) continue;
-    const pid =
-      (((session.data[base + 1] ?? 0) & 0x1f) << 8) |
-      (session.data[base + 2] ?? 0);
-    const bucket = Math.min(
-      bucketCount - 1,
-      Math.floor((index * bucketCount) / packetCount),
-    );
+    const pid = (((session.data[base + 1] ?? 0) & 0x1f) << 8) | (session.data[base + 2] ?? 0);
+    const bucket = Math.min(bucketCount - 1, Math.floor((index * bucketCount) / packetCount));
     bucketPackets[bucket] = (bucketPackets[bucket] ?? 0) + 1;
     bucketBytes[bucket] = (bucketBytes[bucket] ?? 0) + layout.packetSize;
     let entry = pidSeries.get(pid);
@@ -298,9 +307,7 @@ function buildTimeline(
       ...(bucketSec !== undefined ? { startSec: index * bucketSec } : {}),
       packets,
       bytes,
-      ...(bucketSec !== undefined && bucketSec > 0
-        ? { bitrateBps: (bytes * 8) / bucketSec }
-        : {}),
+      ...(bucketSec !== undefined && bucketSec > 0 ? { bitrateBps: (bytes * 8) / bucketSec } : {}),
     };
   });
 
@@ -496,7 +503,8 @@ app.get<{ Params: { id: string }; Querystring: { strict?: string } }>(
     const errors = diagnostics.filter((item) => item.severity === 'error').length;
     const warnings = diagnostics.filter((item) => item.severity === 'warning').length;
     const infos = diagnostics.filter((item) => item.severity === 'info').length;
-    const status = errors > 0 ? 'FAIL' : warnings > 0 && strict ? 'FAIL' : warnings > 0 ? 'WARN' : 'PASS';
+    const status =
+      errors > 0 ? 'FAIL' : warnings > 0 && strict ? 'FAIL' : warnings > 0 ? 'WARN' : 'PASS';
     return {
       summary: {
         errors,
@@ -521,10 +529,7 @@ app.get<{
     10,
     Math.min(600, Number.parseInt(request.query.buckets ?? '120', 10) || 120),
   );
-  const top = Math.max(
-    1,
-    Math.min(32, Number.parseInt(request.query.top ?? '10', 10) || 10),
-  );
+  const top = Math.max(1, Math.min(32, Number.parseInt(request.query.top ?? '10', 10) || 10));
   const includeSubtitles = request.query.subtitles === '1';
   const key = `${buckets}:${top}:${includeSubtitles ? 1 : 0}`;
   session.timeline ??= new Map();
@@ -597,13 +602,63 @@ app.get<{
   };
 });
 
+app.get<{ Params: { id: string } }>('/api/sessions/:id/carousel', async (request, reply) => {
+  const session = sessionOr404(request.params.id, reply);
+  if (!session) return;
+  const scan = sessionCarousel(session);
+  if (!scan) return { carousels: [], files: [] };
+  return {
+    carousels: scan.carousels,
+    files: scan.files.map((file) => ({
+      pid: file.pid,
+      path: file.path,
+      size: file.size,
+      contentType: file.contentType,
+      complete: file.complete,
+      available: file.data !== undefined,
+    })),
+  };
+});
+
+app.get<{ Params: { id: string }; Querystring: { path?: string; pid?: string } }>(
+  '/api/sessions/:id/carousel/file',
+  async (request, reply) => {
+    const session = sessionOr404(request.params.id, reply);
+    if (!session) return;
+    const path = request.query.path ?? '';
+    if (path.length === 0) return reply.code(400).send({ error: 'path is required' });
+    const rawPid = request.query.pid;
+    const pid =
+      rawPid === undefined
+        ? undefined
+        : rawPid.startsWith('0x')
+          ? Number.parseInt(rawPid.slice(2), 16)
+          : Number.parseInt(rawPid, 10);
+    const scan = sessionCarousel(session);
+    const file = scan?.files.find(
+      (entry) => entry.path === path && (pid === undefined || entry.pid === pid),
+    );
+    if (!file || file.data === undefined) {
+      return reply.code(404).send({ error: 'file content not available in the sample' });
+    }
+    const name = basename(path).replace(/["\\\r\n]/g, '_') || 'object';
+    return reply
+      .type(file.contentType ?? 'application/octet-stream')
+      .header('content-disposition', `attachment; filename="${name}"`)
+      .send(Buffer.from(file.data));
+  },
+);
+
 app.get<{ Params: { id: string }; Querystring: { offset?: string; length?: string } }>(
   '/api/sessions/:id/hex',
   async (request, reply) => {
     const session = sessionOr404(request.params.id, reply);
     if (!session) return;
     const offset = Math.max(0, Number.parseInt(request.query.offset ?? '0', 10) || 0);
-    const length = Math.min(8192, Math.max(1, Number.parseInt(request.query.length ?? '256', 10) || 256));
+    const length = Math.min(
+      8192,
+      Math.max(1, Number.parseInt(request.query.length ?? '256', 10) || 256),
+    );
     const end = Math.min(session.data.length, offset + length);
     const bytes = session.data.subarray(offset, end);
     return {
@@ -630,7 +685,10 @@ app.get<{ Params: { id: string }; Querystring: { format?: string } }>(
         .replace(/\u2029/g, '\\u2029');
       return reply
         .type('text/html; charset=utf-8')
-        .header('content-disposition', `attachment; filename="${session.result.source.name}.report.html"`)
+        .header(
+          'content-disposition',
+          `attachment; filename="${session.result.source.name}.report.html"`,
+        )
         .send(`<!doctype html><html><head><meta charset="utf-8"><title>tsinspect report</title>
 <style>body{font:14px/1.5 system-ui,sans-serif;margin:2rem;background:#fff;color:#1b1b1f}pre{background:#f4f4f8;padding:1rem;border-radius:8px;overflow:auto}</style></head>
 <body><h1>${session.result.source.name}</h1><p>tsinspect ${session.result.tool.version} · ${session.result.standard.detected}</p><pre>${json}</pre></body></html>`);
@@ -714,7 +772,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Sta
   if (findFreePort) {
     const limit = preferredPort + 50;
     while (port < limit && !(await isPortFree(host, port))) port += 1;
-    if (port >= limit) throw new Error(`No free port found between ${preferredPort} and ${limit - 1}.`);
+    if (port >= limit)
+      throw new Error(`No free port found between ${preferredPort} and ${limit - 1}.`);
   }
 
   await app.listen({ port, host });

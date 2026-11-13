@@ -1,34 +1,37 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
-import { writeFile } from 'node:fs/promises';
-import { Command, InvalidArgumentError } from 'commander';
-import { startServer } from '@tsinspect/server/app';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { inflateSync } from 'node:zlib';
 import {
-  probeBuffer,
-  formatBytes,
-  hex16,
-  resolveAribProfile,
-  type ProbeResult,
-  type ProbeTable,
-} from '@tsinspect/core';
-import {
+  type CarouselScanResult,
   collectScte35Timeline,
   detectPacketLayout,
+  formatBytes,
+  hex16,
   indexPesStreams,
+  type ProbeResult,
+  type ProbeTable,
+  probeBuffer,
+  resolveAribProfile,
+  type ScannedCarouselFile,
   type Scte35Timeline,
   type Scte35TimelineEvent,
+  scanCarousels,
 } from '@tsinspect/core';
-import { loadSource, parseByteSize } from './source.js';
-import { formatProbeText, formatTableIndexText } from './format/probe.js';
+import { startServer } from '@tsinspect/server/app';
+import { Command, InvalidArgumentError } from 'commander';
+import { type ExtractKind, runExtract } from './extract.js';
 import { formatProbeHtml } from './format/html.js';
-import { formatTableIndexHtml } from './format/tables.js';
 import { formatPesText } from './format/pes.js';
-import { runExtract, type ExtractKind } from './extract.js';
+import { formatProbeText, formatTableIndexText } from './format/probe.js';
+import { formatTableIndexHtml } from './format/tables.js';
 import {
   formatValidationJson,
   formatValidationText,
   summarizeDiagnostics,
 } from './format/validate.js';
+import { loadSource, parseByteSize } from './source.js';
 
 const VERSION = '0.0.1';
 const DEFAULT_MAX_BYTES = 64 * 1024 * 1024;
@@ -164,7 +167,12 @@ program
         tables = tables.filter((table) => pids.has(table.pid));
       }
       const filtered: ProbeResult = { ...result, tables };
-      const output = renderTables(filtered, options.format, options.all ?? false, options.detail ?? false);
+      const output = renderTables(
+        filtered,
+        options.format,
+        options.all ?? false,
+        options.detail ?? false,
+      );
 
       if (options.out) {
         await writeFile(options.out, `${output}\n`, 'utf8');
@@ -258,12 +266,7 @@ program
     parseProfileArgument,
     'auto',
   )
-  .option(
-    '-f, --format <format>',
-    'output format: text, json',
-    parseTextJsonFormatArgument,
-    'text',
-  )
+  .option('-f, --format <format>', 'output format: text, json', parseTextJsonFormatArgument, 'text')
   .option('-o, --out <file>', 'write the PES index to a file instead of stdout')
   .action(async (source: string, options: PesCommandOptions) => {
     try {
@@ -338,7 +341,9 @@ program
         outDir: options.out,
         profile,
       });
-      process.stdout.write(`tsinspect: extracted ${extracted.files.length} file(s) to ${options.out}\n`);
+      process.stdout.write(
+        `tsinspect: extracted ${extracted.files.length} file(s) to ${options.out}\n`,
+      );
       for (const line of extracted.lines) process.stdout.write(`  ${line}\n`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -357,17 +362,8 @@ program
     parseSizeArgument,
   )
   .option('-p, --pid <pids>', 'only these PIDs (comma separated)', parsePidListArgument)
-  .option(
-    '-t, --timeline',
-    'include estimated event times and derived break intervals',
-    false,
-  )
-  .option(
-    '-f, --format <format>',
-    'output format: text, json',
-    parseTextJsonFormatArgument,
-    'text',
-  )
+  .option('-t, --timeline', 'include estimated event times and derived break intervals', false)
+  .option('-f, --format <format>', 'output format: text, json', parseTextJsonFormatArgument, 'text')
   .option('-o, --out <file>', 'write the SCTE-35 index to a file instead of stdout')
   .action(async (source: string, options: PesCommandOptions) => {
     try {
@@ -384,8 +380,7 @@ program
                     stream.streamType === 0x86 ||
                     stream.descriptors.some(
                       (descriptor) =>
-                        descriptor.tag === 0x05 &&
-                        descriptor.fields?.formatIdentifier === 'CUEI',
+                        descriptor.tag === 0x05 && descriptor.fields?.formatIdentifier === 'CUEI',
                     ),
                 )
                 .map((stream) => stream.pid),
@@ -435,6 +430,74 @@ program
   });
 
 program
+  .command('carousel')
+  .description('list or export DSM-CC object carousel files')
+  .argument('<source>', 'path to a .ts/.m2ts/.trp file or an HTTP(S) URL')
+  .option(
+    '-b, --bytes <size>',
+    'read at most this many bytes (default 64 MiB; 0 reads everything)',
+    parseSizeArgument,
+  )
+  .option('-p, --pid <pids>', 'only these PIDs (comma separated)', parsePidListArgument)
+  .option('--export <dir>', 'export recovered files into this directory')
+  .option('-f, --format <format>', 'output format: text, json', parseTextJsonFormatArgument, 'text')
+  .option('-o, --out <file>', 'write the carousel index to a file instead of stdout')
+  .action(async (source: string, options: PesCommandOptions & { export?: string }) => {
+    try {
+      const { data, result } = await loadSourceAndProbe(source, options);
+      const scan = scanCarousels(data, {
+        ...(options.pid !== undefined ? { pids: new Set(options.pid) } : {}),
+        inflate: (payload) => new Uint8Array(inflateSync(payload)),
+      });
+      if (scan.carousels.length === 0) {
+        throw new Error('No DSM-CC object carousel found in the sampled data.');
+      }
+
+      const output =
+        options.format === 'json'
+          ? JSON.stringify(
+              {
+                schemaVersion: result.schemaVersion,
+                tool: result.tool,
+                source: result.source,
+                standard: result.standard,
+                carousels: scan.carousels,
+                files: scan.files.map((file) => ({
+                  pid: file.pid,
+                  path: file.path,
+                  size: file.size,
+                  contentType: file.contentType,
+                  complete: file.complete,
+                })),
+              },
+              null,
+              2,
+            )
+          : formatCarouselText(result, scan);
+
+      if (options.export) {
+        const written = await exportCarouselFiles(scan.files, options.export);
+        process.stderr.write(
+          `tsinspect: exported ${written.files} file(s) from ${written.carousels} carousel(s) to ${options.export}\n`,
+        );
+        if (written.skipped > 0) {
+          process.stderr.write(`tsinspect: skipped ${written.skipped} incomplete file(s)\n`);
+        }
+      }
+      if (options.out) {
+        await writeFile(options.out, `${output}\n`, 'utf8');
+        process.stderr.write(`tsinspect: wrote carousel index to ${options.out}\n`);
+      } else if (!options.export) {
+        process.stdout.write(`${output}\n`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`tsinspect: ${message}\n`);
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('version')
   .description('print the version')
   .action(() => {
@@ -469,6 +532,7 @@ async function loadSourceAndProbe(
     full: loaded.size === undefined ? maxBytes === 0 : loaded.data.length >= loaded.size,
     toolVersion: VERSION,
     textProfile: options.profile ?? 'auto',
+    inflate: (payload) => new Uint8Array(inflateSync(payload)),
   });
   return { data: loaded.data, result };
 }
@@ -565,8 +629,7 @@ function formatEventTime(event: Scte35TimelineEvent): string {
 }
 
 function formatScte35Event(event: Scte35TimelineEvent): string {
-  const pts =
-    event.splicePts !== undefined ? `${(event.splicePts / 90_000).toFixed(3)}s` : '-';
+  const pts = event.splicePts !== undefined ? `${(event.splicePts / 90_000).toFixed(3)}s` : '-';
   const duration =
     event.breakDuration !== undefined
       ? `${(event.breakDuration / 90_000).toFixed(3)}s${event.autoReturn ? ' auto' : ''}`
@@ -588,6 +651,97 @@ function formatScte35Event(event: Scte35TimelineEvent): string {
   );
 }
 
+function formatCarouselText(result: ProbeResult, scan: CarouselScanResult): string {
+  const lines: string[] = [];
+  lines.push(`tsinspect ${result.tool.version} - DSM-CC object carousel`);
+  lines.push('');
+  lines.push(`Source       ${result.source.name}`);
+  lines.push(`Standard     ${result.standard.detected}`);
+  lines.push('');
+  for (const carousel of scan.carousels) {
+    lines.push(
+      `PID ${hex16(carousel.pid)}  DSI ${carousel.serverInitiates}  DII ${carousel.downloadInfos}  DDB ${carousel.dataBlocks}  modules ${carousel.modules.length}`,
+    );
+    lines.push(
+      `  root ${carousel.root ?? '(unresolved)'}  complete modules ${carousel.completeModules}  pending ${carousel.pendingModules}${carousel.compressedModules > 0 ? `  compressed ${carousel.compressedModules}` : ''}`,
+    );
+    if (carousel.entries.length === 0) {
+      lines.push('  No objects recovered; the carousel modules were not complete in the sample.');
+    }
+    for (const entry of carousel.entries) {
+      const depth = entry.path === '/' ? 0 : entry.path.split('/').length - 1;
+      const name = entry.path === '/' ? '/' : (entry.path.split('/').pop() ?? entry.path);
+      const marker = entry.kind === 'directory' ? '+' : entry.kind === 'stream' ? '*' : '-';
+      const details: string[] = [];
+      if (entry.size !== undefined) details.push(`${entry.size} B`);
+      if (entry.contentType !== undefined) details.push(entry.contentType);
+      if (!entry.complete && entry.kind === 'file') details.push('incomplete');
+      if (entry.programs !== undefined && entry.programs.length > 0) {
+        details.push(`program ${entry.programs.join(',')}`);
+      }
+      lines.push(
+        `  ${'  '.repeat(depth)}${marker} ${name}${details.length > 0 ? `  (${details.join(', ')})` : ''}`,
+      );
+    }
+    if (carousel.danglingBindings > 0) {
+      lines.push(
+        `  ${carousel.danglingBindings} binding(s) referenced objects not present in the sample`,
+      );
+    }
+    if (carousel.truncated) lines.push('  resource limit reached; output truncated');
+    lines.push('');
+  }
+  const complete = scan.files.filter((file) => file.complete).length;
+  lines.push(`Files        ${scan.files.length} (${complete} with recovered content)`);
+  return lines.join('\n');
+}
+
+const INVALID_PATH_CHARS = /[<>:"|?*\u0000-\u001f]/g;
+
+/** Write recovered files under `outDir`; paths are sanitised component-wise. */
+async function exportCarouselFiles(
+  files: ScannedCarouselFile[],
+  outDir: string,
+): Promise<{ files: number; carousels: number; skipped: number }> {
+  const pids = new Set(files.map((file) => file.pid));
+  const perPid = pids.size > 1;
+  let written = 0;
+  let skipped = 0;
+  const used = new Set<string>();
+
+  for (const file of files) {
+    if (!file.complete || file.data === undefined) {
+      skipped += 1;
+      continue;
+    }
+    const components = file.path
+      .split('/')
+      .map((part) => part.replace(INVALID_PATH_CHARS, '_').trim())
+      .filter((part) => part.length > 0 && part !== '.');
+    if (components.length === 0 || components.includes('..')) {
+      skipped += 1;
+      continue;
+    }
+    const prefix = perPid ? [`pid-${file.pid.toString(16).padStart(4, '0')}`] : [];
+    let target = join(outDir, ...prefix, ...components);
+    let suffix = 1;
+    while (used.has(target)) {
+      suffix += 1;
+      target = join(
+        outDir,
+        ...prefix,
+        ...components.slice(0, -1),
+        `${components.at(-1)}-${suffix}`,
+      );
+    }
+    used.add(target);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, file.data);
+    written += 1;
+  }
+  return { files: written, carousels: pids.size, skipped };
+}
+
 function parsePidListArgument(value: string): number[] {
   const parts = value
     .split(',')
@@ -595,7 +749,9 @@ function parsePidListArgument(value: string): number[] {
     .filter((part) => part.length > 0);
   if (parts.length === 0) throw new InvalidArgumentError('expected at least one PID');
   return parts.map((part) => {
-    const pid = part.startsWith('0x') ? Number.parseInt(part.slice(2), 16) : Number.parseInt(part, 10);
+    const pid = part.startsWith('0x')
+      ? Number.parseInt(part.slice(2), 16)
+      : Number.parseInt(part, 10);
     if (!Number.isInteger(pid) || pid < 0 || pid > 0x1fff) {
       throw new InvalidArgumentError(`invalid PID: ${part}`);
     }
@@ -732,6 +888,7 @@ const KNOWN_COMMANDS = new Set([
   'pes',
   'extract',
   'scte35',
+  'carousel',
   'serve',
   'version',
   'help',

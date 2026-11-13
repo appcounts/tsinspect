@@ -93,6 +93,11 @@ export interface ProbeOptions {
   textProfile?: 'auto' | 'japan' | 'brazil';
   /** Called periodically while the packet loop runs. */
   onProgress?: (progress: ProbeProgress) => void;
+  /**
+   * Decompress DSM-CC modules signalled with the compressed_module_descriptor.
+   * Node callers pass zlib; the browser build leaves carousels compressed.
+   */
+  inflate?: (data: Uint8Array) => Uint8Array;
 }
 
 const PSI_PIDS = new Set<number>([
@@ -346,7 +351,9 @@ function probeBufferInternal(
   const ewbsFlagSpans: EmergencySpan[] = [];
   let ewbsFlagSpan: EmergencySpan | undefined;
   const dataPids = new Set<number>();
-  const dataBroadcast = new DataBroadcastAccumulator();
+  const dataBroadcast = new DataBroadcastAccumulator(
+    options.inflate ? { inflate: options.inflate } : {},
+  );
 
   /**
    * Merge one emergency_information_descriptor (0xFC) into the EWBS state.
@@ -1261,11 +1268,13 @@ function probeBufferInternal(
                 ? existing.runningStatus
                 : event.runningStatus;
             const runningStatusName = pick(event.runningStatusName, existing?.runningStatusName);
-            // Index 0 of a p/f section is the present event, the rest is the
-            // following one. Schedule occurrences keep the existing position.
+            // DVB assigns the present event to section_number 0 and the
+            // following event to section_number 1. A few encoders put both
+            // events in one section, so fall back to the event position within
+            // the section. Schedule occurrences keep the p/f position.
             const presentFollowing =
               eit.kind === 'present-following'
-                ? eventIndex === 0
+                ? eit.sectionNumber === 0 && eventIndex === 0
                   ? 'present'
                   : 'following'
                 : existing?.presentFollowing;

@@ -1,4 +1,10 @@
-import type { PesPacket, ProbeResult, Scte35Timeline, SubtitleReport } from '@tsinspect/core';
+import type {
+  CarouselScanResult,
+  PesPacket,
+  ProbeResult,
+  Scte35Timeline,
+  SubtitleReport,
+} from '@tsinspect/core';
 import { SESSION_BUDGET_BYTES, SESSION_IDLE_TIMEOUT_MS, SESSION_SWEEP_MS } from './config.js';
 
 export interface TimelineBucket {
@@ -45,6 +51,7 @@ export interface Session {
   subtitles?: SubtitleReport;
   dvbPes?: Map<number, PesPacket[]>;
   timeline?: Map<string, TimelineData>;
+  carousel?: CarouselScanResult;
 }
 
 interface SessionEntry {
@@ -73,6 +80,7 @@ function dispose(entry: SessionEntry): void {
   session.dvbPes = undefined;
   session.timeline?.clear();
   session.timeline = undefined;
+  session.carousel = undefined;
   session.data = EMPTY_DATA;
 }
 

@@ -14,8 +14,17 @@ import type {
   ProbeMpeFec,
   ProbeMpeSession,
 } from '../model/types.js';
+import { SectionAssembler } from '../section/assembler.js';
 import type { AitSection } from '../tables/dvb-extra.js';
-import { readU16, readU32 } from '../util/bytes.js';
+import { detectPacketLayout, scanPackets } from '../ts/reader.js';
+import { readU16 } from '../util/bytes.js';
+import {
+  type CarouselOptions,
+  type DataSectionSummary,
+  ObjectCarouselState,
+} from './object-carousel.js';
+
+export type { DataSectionSummary } from './object-carousel.js';
 
 export const MPE_DATAGRAM_TABLE = 0x3e;
 export const MPE_FEC_TABLE = 0x78;
@@ -97,99 +106,17 @@ function applicationName(ait: AitSection, index: number): string | undefined {
   return text.length > 0 ? text : undefined;
 }
 
-function biopKind(kind: string): 'file' | 'directory' | 'service-gateway' | 'unknown' {
-  if (kind === 'fil') return 'file';
-  if (kind === 'dir') return 'directory';
-  if (kind === 'srg') return 'service-gateway';
-  return 'unknown';
-}
-
-interface BiopMessage {
-  kind: 'file' | 'directory' | 'service-gateway' | 'unknown';
-  name?: string;
-  size?: number;
-}
-
-/** Parse the BIOP messages carried inside a DSM-CC DownloadDataBlock. */
-function parseBiopMessages(payload: Uint8Array): BiopMessage[] {
-  const messages: BiopMessage[] = [];
-  let cursor = 0;
-  while (cursor + 11 <= payload.length && messages.length < 64) {
-    if (
-      payload[cursor] !== 0x42 ||
-      payload[cursor + 1] !== 0x49 ||
-      payload[cursor + 2] !== 0x4f ||
-      payload[cursor + 3] !== 0x50
-    ) {
-      cursor += 1;
-      continue;
-    }
-    const messageSize = readU32(payload, cursor + 6);
-    const kindLength = payload[cursor + 10] as number;
-    if (kindLength === 0 || cursor + 11 + kindLength > payload.length) break;
-    const kind = String.fromCharCode(
-      ...payload.subarray(cursor + 11, cursor + 11 + kindLength),
-    );
-    let position = cursor + 11 + kindLength;
-    if (position >= payload.length) break;
-    const keyLength = payload[position] as number;
-    position += 1;
-    const objectKey =
-      keyLength > 0 && position + keyLength <= payload.length
-        ? payload.subarray(position, position + keyLength)
-        : undefined;
-    position += keyLength;
-    const entry: BiopMessage = { kind: biopKind(kind) };
-    if (position + 4 <= payload.length) {
-      const infoLength = readU32(payload, position);
-      const infoStart = position + 4;
-      const infoEnd = Math.min(payload.length, infoStart + infoLength);
-      if (entry.kind === 'file' && infoEnd >= infoStart + 8) {
-        // FileInfo: contentLength is the first 32-bit field in the body.
-        entry.size = readU32(payload, infoStart);
-      }
-      const keyText =
-        objectKey && objectKey.every((value) => value >= 0x20 && value <= 0x7e)
-          ? String.fromCharCode(...objectKey)
-          : undefined;
-      const infoText = descriptorText(
-        Array.from(payload.subarray(infoStart, infoEnd))
-          .map((value) => value.toString(16).padStart(2, '0'))
-          .join(''),
-      );
-      const candidate = keyText ?? (infoText.length > 1 ? infoText : undefined);
-      if (candidate) entry.name = candidate;
-    }
-    messages.push(entry);
-    cursor += messageSize > 0 ? Math.max(messageSize, 11) : 11;
-  }
-  return messages;
-}
-
-interface CarouselState {
-  pid: number;
-  dsi: number;
-  dii: number;
-  ddb: number;
-  transactions: Set<number>;
-  modules: ProbeDsmccCarousel['modules'];
-  objects: ProbeDsmccCarousel['objects'];
-  gateways: Set<string>;
-}
-
-export interface DataSectionSummary {
-  fields: Record<string, string | number | boolean>;
-}
-
 export class DataBroadcastAccumulator {
   private readonly mpe = new Map<string, ProbeMpeSession>();
   private readonly fec = new Map<number, ProbeMpeFec>();
-  private readonly carousels = new Map<number, CarouselState>();
+  private readonly carousels = new Map<number, ObjectCarouselState>();
   private readonly applications: ProbeBroadcastApplication[] = [];
   private readonly applicationKeys = new Set<string>();
   private readonly applicationTypes = new Set<number>();
   private sawMhp = false;
   private sawHbbtv = false;
+
+  constructor(private readonly carouselOptions: CarouselOptions = {}) {}
 
   /** Parse one section from a data PID; returns table field summaries. */
   pushSection(pid: number, data: Uint8Array): DataSectionSummary | null {
@@ -204,7 +131,11 @@ export class DataBroadcastAccumulator {
 
   addAit(pid: number, ait: AitSection): void {
     const typeName = applicationTypeName(ait.applicationType);
-    if (ait.applicationType === 0x0001 || ait.applicationType === 0x0002 || ait.applicationType === 0x0003) {
+    if (
+      ait.applicationType === 0x0001 ||
+      ait.applicationType === 0x0002 ||
+      ait.applicationType === 0x0003
+    ) {
       this.sawMhp = true;
     }
     if (ait.applicationType === 0x0010 || ait.applicationType === 0x0011) {
@@ -251,16 +182,7 @@ export class DataBroadcastAccumulator {
       paddingColumns: entry.paddingColumns,
       payloadBytes: entry.payloadBytes,
     }));
-    const carousels = [...this.carousels.values()].map((state) => ({
-      pid: state.pid,
-      serverInitiates: state.dsi,
-      downloadInfos: state.dii,
-      dataBlocks: state.ddb,
-      transactions: [...state.transactions].sort((a, b) => a - b),
-      modules: state.modules,
-      objects: state.objects,
-      gateways: [...state.gateways],
-    }));
+    const carousels = [...this.carousels.values()].map((state) => state.report);
     return {
       mpe: [...this.mpe.values()],
       mpeFec: fec,
@@ -385,24 +307,6 @@ export class DataBroadcastAccumulator {
     };
   }
 
-  private carousel(pid: number): CarouselState {
-    let state = this.carousels.get(pid);
-    if (!state) {
-      state = {
-        pid,
-        dsi: 0,
-        dii: 0,
-        ddb: 0,
-        transactions: new Set<number>(),
-        modules: [],
-        objects: [],
-        gateways: new Set<string>(),
-      };
-      this.carousels.set(pid, state);
-    }
-    return state;
-  }
-
   private pushDsmcc(pid: number, data: Uint8Array): DataSectionSummary | null {
     if (data.length < 20) return null;
     // DSM-CC DownloadDataMessage / DownloadDataBlock share the long section
@@ -410,81 +314,94 @@ export class DataBroadcastAccumulator {
     if (((data[1] as number) & 0x80) === 0) return null;
     if (((data[5] as number) & 0x01) === 0) return null;
     if (data[8] !== 0x11 || data[9] !== 0x03) return null;
-    const tableId = data[0] as number;
-    const messageId = readU16(data, 10);
-    const transactionId = readU32(data, 12);
-    const adaptationLength = data[17] as number;
-    const messageLength = readU16(data, 18);
-    const bodyStart = 20 + adaptationLength;
-    const bodyEnd = Math.min(data.length - 4, bodyStart + messageLength);
-    const state = this.carousel(pid);
-    state.transactions.add(transactionId);
+    if (readU16(data, 10) < 0x1001) return null;
 
-    if (tableId === DSMCC_DOWNLOAD_TABLE) {
-      if (messageId === 0x1001) {
-        state.dsi += 1;
-        // DSI: serverId then a BIOP service gateway object.
-        if (bodyStart + 4 < bodyEnd) {
-          for (const message of parseBiopMessages(data.subarray(bodyStart + 4, bodyEnd))) {
-            if (message.kind === 'service-gateway' && message.name) {
-              state.gateways.add(message.name);
-            }
-          }
-        }
-      } else if (messageId === 0x1002) {
-        state.dii += 1;
-        if (bodyStart + 18 <= bodyEnd) {
-          const downloadId = readU32(data, bodyStart);
-          state.transactions.add(downloadId);
-          const moduleCount = readU16(data, bodyStart + 16);
-          let cursor = bodyStart + 18;
-          for (let index = 0; index < moduleCount && cursor + 8 <= bodyEnd; index += 1) {
-            const moduleId = readU16(data, cursor);
-            const moduleSize = readU32(data, cursor + 2);
-            const version = data[cursor + 6] as number;
-            const infoLength = data[cursor + 7] as number;
-            state.modules.push({ id: moduleId, size: moduleSize, version });
-            cursor += 8 + infoLength;
-          }
-        }
-      }
-      return {
-        fields: {
-          messageId: `0x${messageId.toString(16).toUpperCase()}`,
-          transactionId,
-          modules: state.modules.length,
-        },
-      };
-    }
-
-    // DownloadDataBlock: moduleId, moduleVersion, reserved, blockNumber, data.
-    const moduleId = readU16(data, bodyStart);
-    const blockNumber = readU16(data, bodyStart + 4);
-    state.ddb += 1;
-    const blockDataStart = bodyStart + 6;
-    if (bodyEnd > blockDataStart) {
-      for (const message of parseBiopMessages(data.subarray(blockDataStart, bodyEnd))) {
-        if (message.kind === 'service-gateway') {
-          if (message.name) state.gateways.add(message.name);
-          continue;
-        }
-        const entry = {
-          name: message.name ?? `block ${blockNumber}`,
-          kind: message.kind,
-          ...(message.size !== undefined ? { size: message.size } : {}),
-        };
-        if (!state.objects.some((object) => object.name === entry.name && object.kind === entry.kind)) {
-          if (state.objects.length < 200) state.objects.push(entry);
-        }
-      }
-    }
-    return {
-      fields: {
-        transactionId,
-        moduleId,
-        blockNumber,
-        objects: state.objects.length,
-      },
-    };
+    let state = this.carousels.get(pid);
+    const created = state === undefined;
+    if (!state) state = new ObjectCarouselState(pid, this.carouselOptions);
+    const summary = state.pushSection(data);
+    if (summary && created) this.carousels.set(pid, state);
+    return summary;
   }
+}
+
+export interface CarouselScanOptions extends CarouselOptions {
+  /** Restrict the scan to these PIDs. */
+  pids?: Set<number>;
+}
+
+export interface ScannedCarouselFile {
+  pid: number;
+  path: string;
+  size?: number;
+  contentType?: string;
+  complete: boolean;
+  data?: Uint8Array;
+}
+
+export interface CarouselScanResult {
+  carousels: ProbeDsmccCarousel[];
+  files: ScannedCarouselFile[];
+}
+
+/**
+ * Rebuild every DSM-CC object carousel in a buffer and return the file
+ * contents as well. `probe` only reports metadata; extraction commands and the
+ * session API use this to export objects.
+ */
+export function scanCarousels(
+  data: Uint8Array,
+  options: CarouselScanOptions = {},
+): CarouselScanResult {
+  const layout = detectPacketLayout(data);
+  if (!layout) return { carousels: [], files: [] };
+
+  const assemblers = new Map<number, SectionAssembler>();
+  const states = new Map<number, ObjectCarouselState>();
+
+  for (const packet of scanPackets(data, layout)) {
+    if (!packet.hasPayload || packet.payload === undefined) continue;
+    if (options.pids && !options.pids.has(packet.pid)) continue;
+    if (packet.scrambling !== 0) {
+      assemblers.delete(packet.pid);
+      continue;
+    }
+    let assembler = assemblers.get(packet.pid);
+    if (!assembler) {
+      assembler = new SectionAssembler(packet.pid);
+      assemblers.set(packet.pid, assembler);
+    }
+    for (const section of assembler.push(
+      packet.payload,
+      packet.pusi,
+      packet.index,
+      packet.offset,
+    )) {
+      const tableId = section.data[0] as number;
+      if (tableId !== DSMCC_DOWNLOAD_TABLE && tableId !== DSMCC_DDB_TABLE) continue;
+      let state = states.get(packet.pid);
+      if (!state) {
+        state = new ObjectCarouselState(packet.pid, options);
+      }
+      if (state.pushSection(section.data) === null) continue;
+      states.set(packet.pid, state);
+    }
+  }
+
+  const carousels: ProbeDsmccCarousel[] = [];
+  const files: ScannedCarouselFile[] = [];
+  for (const [pid, state] of states) {
+    carousels.push(state.report);
+    for (const file of state.collectFiles()) {
+      files.push({
+        pid,
+        path: file.path,
+        ...(file.size !== undefined ? { size: file.size } : {}),
+        ...(file.contentType !== undefined ? { contentType: file.contentType } : {}),
+        complete: file.complete,
+        ...(file.data !== undefined ? { data: file.data } : {}),
+      });
+    }
+  }
+  return { carousels, files };
 }

@@ -1,4 +1,5 @@
 import { parentPort, workerData } from 'node:worker_threads';
+import { inflateSync } from 'node:zlib';
 import { probeBuffer, type ProbeOptions, type ProbeProgress } from '@tsinspect/core';
 
 interface ProbeWorkerData {
@@ -15,6 +16,7 @@ const { buffer, byteOffset, byteLength, options } = workerData as ProbeWorkerDat
 try {
   const result = probeBuffer(new Uint8Array(buffer, byteOffset, byteLength), {
     ...options,
+    inflate: (payload) => new Uint8Array(inflateSync(payload)),
     onProgress: (progress: ProbeProgress) => port.postMessage({ type: 'progress', progress }),
   });
   // Hand the buffer back so the server can keep serving the session without

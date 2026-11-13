@@ -2,6 +2,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { buildAribDrcsFixture } from '../arib-fixture.js';
+import { carouselTransportStream } from '../carousel-fixture.js';
 
 const sample = resolve('.cache/streams/atsc-473.head.ts');
 const scte35Sample = resolve('.cache/streams/scte35-sample.head.ts');
@@ -386,5 +387,45 @@ test.describe('web console', () => {
 
     await page.getByRole('button', { name: /^NPO 2/ }).click();
     await expect(page.getByText('8:88').first()).toBeVisible();
+  });
+});
+
+test.describe('object carousel', () => {
+  const carouselSample = resolve('.cache/streams/carousel-synthetic.ts');
+
+  test('lists the rebuilt directory tree and downloads a file', async ({ page }) => {
+    writeFileSync(carouselSample, carouselTransportStream({ blockSize: 64 }));
+    const created = await page.request.post('/api/sessions', {
+      data: { source: carouselSample, bytes: 0 },
+    });
+    expect(created.ok()).toBe(true);
+    const session = (await created.json()) as { id: string };
+
+    const response = await page.request.get(`/api/sessions/${session.id}/carousel`);
+    expect(response.ok()).toBe(true);
+    const scan = (await response.json()) as {
+      carousels: Array<{ root?: string; entries: Array<{ path: string }> }>;
+      files: Array<{ path: string; available: boolean }>;
+    };
+    expect(scan.carousels[0]?.root).toBe('/');
+    expect(scan.carousels[0]?.entries.map((entry) => entry.path)).toEqual([
+      '/',
+      '/index.html',
+      '/css',
+      '/css/site.css',
+    ]);
+    expect(scan.files.map((file) => file.path).sort()).toEqual(['/css/site.css', '/index.html']);
+
+    const download = await page.request.get(
+      `/api/sessions/${session.id}/carousel/file?path=%2Findex.html&pid=0x0300`,
+    );
+    expect(download.ok()).toBe(true);
+    expect(await download.text()).toContain('hello carousel');
+
+    await page.goto(`/#session=${session.id}&tab=data`);
+    await expect(page.locator('.carousel-tree')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('index.html').first()).toBeVisible();
+    await expect(page.getByText('site.css').first()).toBeVisible();
+    await expect(page.getByText('下载').first()).toBeVisible();
   });
 });

@@ -366,6 +366,24 @@ export interface ProbeMpeFec {
   payloadBytes: number;
 }
 
+/** One entry in a rebuilt object carousel directory tree. */
+export interface ProbeCarouselEntry {
+  /** Absolute path inside the carousel, "/" separated ("/" is the root). */
+  path: string;
+  kind: 'file' | 'directory' | 'stream';
+  /** Announced content size for files. */
+  size?: number;
+  /** File content was recovered from the carousel modules. */
+  complete: boolean;
+  /** Module that carries the object (files only). */
+  moduleId?: number;
+  /** Printable object key, e.g. "003". */
+  objectKey?: string;
+  contentType?: string;
+  /** Program numbers referenced by stream object taps. */
+  programs?: number[];
+}
+
 /** One DSM-CC object carousel announced on a data PID. */
 export interface ProbeDsmccCarousel {
   pid: number;
@@ -379,7 +397,7 @@ export interface ProbeDsmccCarousel {
   transactions: number[];
   /** Modules announced by DII messages. */
   modules: Array<{ id: number; size: number; version?: number }>;
-  /** Files and directories decoded from BIOP messages. */
+  /** Files and directories decoded from BIOP messages (flat list). */
   objects: Array<{
     name: string;
     kind: 'file' | 'directory' | 'service-gateway' | 'unknown';
@@ -387,6 +405,22 @@ export interface ProbeDsmccCarousel {
   }>;
   /** Service gateway object kinds seen in DSI messages. */
   gateways: string[];
+  /** Root of the rebuilt tree, when a service gateway was resolved. */
+  root?: string;
+  /** Directory tree rebuilt from the service gateway bindings. */
+  entries: ProbeCarouselEntry[];
+  /** Modules whose data blocks were complete and parsed. */
+  completeModules: number;
+  /** Announced modules that still miss data blocks in the sample. */
+  pendingModules: number;
+  /** Modules signalled as compressed (zlib) by the moduleInfo descriptors. */
+  compressedModules: number;
+  /** Bindings whose referenced object was not present in the sample. */
+  danglingBindings: number;
+  /** Parsed objects that no directory binding reaches. */
+  unreachableObjects: number;
+  /** The tree, module or content budget was exhausted before completion. */
+  truncated?: boolean;
 }
 
 /** MHP or HbbTV application announced by an AIT. */
